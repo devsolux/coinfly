@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "distribution_kind": "local-development",
+  "verification": "LOCAL_SOURCE_LOCKS",
+  "source_locks_sha256": "d786a631714bc2d89ec734aef0bf239b07833c2b781443b5d37495731bae72d1"
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "is_development_build": true,
+  "application_version": "1.0.0",
+  "bundle_identifiers": {
+    "desktop": "com.devsolux.coinfly",
+    "worker": "com.devsolux.coinfly.worker"
+  },
+  "environment": "SANDBOX",
+  "run_profile": "PAPER",
+  "release": "malecns-v1.0",
+  "model_profile": "coinfly-dual-compartment-v1",
+  "dataset_files": [
+    "annotations.feather",
+    "edges.feather",
+    "graph.npz",
+    "neurotransmitters.feather",
+    "normalized/neurons.feather"
+  ],
+  "root_sha256": "acc7a66b7db1fb825676203fa5cfd207f42afce1ff09f342bec411253983eb6d"
+}

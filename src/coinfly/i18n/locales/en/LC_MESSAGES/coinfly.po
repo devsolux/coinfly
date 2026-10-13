@@ -1,0 +1,346 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+
+msgid "account_age"
+msgstr "Account age"
+
+msgid "ack_note"
+msgstr "Acknowledgment does not clear a fence or resolve an unknown order."
+
+msgid "acknowledge"
+msgstr "Acknowledge selected alarm"
+
+msgid "activity"
+msgstr "Activity"
+
+msgid "affected"
+msgstr "Affected slots"
+
+msgid "alarms"
+msgstr "Safety incidents"
+
+msgid "all_events"
+msgstr "All Events"
+
+msgid "apply"
+msgstr "Preview change"
+
+msgid "arm"
+msgstr "Arm effective context"
+
+msgid "arm_note"
+msgstr "Activation applies only to the displayed effective context and current revision. It does not force a purchase."
+
+msgid "arm_title"
+msgstr "Confirm context-bound activation"
+
+msgid "balance"
+msgstr "Realtime Current Balance"
+
+msgid "balance_note"
+msgstr "Restrictions are separate disclosures. Observed assets do not authorize spending or transfers."
+
+msgid "bootstrap"
+msgstr "MaleCNS dataset initialization"
+
+msgid "bootstrap_note"
+msgstr "Normal controls remain blocked until the worker attests READY. Existing protection and reconciliation continue."
+
+msgid "bootstrap_trust"
+msgstr "100% downloaded is not readiness. Files, signed metadata and compatibility must be verified."
+
+msgid "bytes"
+msgstr "Bytes received"
+
+msgid "cancel"
+msgstr "Cancel"
+
+msgid "cancel_setup"
+msgstr "Cancel setup"
+
+msgid "checking"
+msgstr "Checking verified model assets…"
+
+msgid "confirm"
+msgstr "Confirm change"
+
+msgid "coverage"
+msgstr "Coverage"
+
+msgid "credential_gate"
+msgstr "Requires certified native vault and signed IPC peer verification."
+
+msgid "credentials"
+msgstr "Native credential enrollment"
+
+msgid "delete"
+msgstr "Delete after stop"
+
+msgid "discrepancy"
+msgstr "Reconciliation discrepancy"
+
+msgid "disk"
+msgstr "Disk status"
+
+msgid "drain_policy"
+msgstr "Drain policy"
+
+msgid "edit"
+msgstr "Edit"
+
+msgid "effective"
+msgstr "Effective context"
+
+msgid "environment"
+msgstr "Environment"
+
+msgid "event"
+msgstr "Event"
+
+msgid "evidence"
+msgstr "Missing evidence / blocking reason"
+
+msgid "execution"
+msgstr "Execution"
+
+msgid "export"
+msgstr "Export CSV"
+
+msgid "fees_slippage"
+msgstr "Fees / slippage scope"
+
+msgid "first"
+msgstr "First"
+
+msgid "global_policy"
+msgstr "GLOBAL requires verified account eligibility. GERMANY is this application's spot-only policy."
+
+msgid "history_frozen"
+msgstr "Ten rows per full page. Rows, count and totals are frozen at the same ledger snapshot."
+
+msgid "instrument"
+msgstr "Instrument"
+
+msgid "keystore"
+msgstr "Native signing access"
+
+msgid "language"
+msgstr "Language"
+
+msgid "last"
+msgstr "Last"
+
+msgid "lifecycle"
+msgstr "Lifecycle"
+
+msgid "live_drain"
+msgstr "REAL LIVE ORDERS: remaining source exits still execute in LIVE, even when the requested target is SANDBOX."
+
+msgid "locked"
+msgstr "Locked execution collateral"
+
+msgid "loss"
+msgstr "Closed loss"
+
+msgid "mark_age"
+msgstr "Valuation age"
+
+msgid "max_active_episodes"
+msgstr "Maximum active episodes"
+
+msgid "max_daily_loss"
+msgstr "Maximum daily loss (reporting currency)"
+
+msgid "max_drawdown_fraction"
+msgstr "Maximum drawdown (fraction, e.g. 0.20)"
+
+msgid "max_gross_exposure"
+msgstr "Maximum gross exposure (equity multiple)"
+
+msgid "max_order_notional"
+msgstr "Maximum order notional (reporting currency)"
+
+msgid "mode"
+msgstr "Product"
+
+msgid "net"
+msgstr "Closed net"
+
+msgid "network_settings"
+msgstr "Network settings"
+
+msgid "new"
+msgstr "New"
+
+msgid "new_events"
+msgstr "New events are available. Refresh to create a new report snapshot."
+
+msgid "next"
+msgstr "Next"
+
+msgid "no_funds"
+msgstr "No verified account balance received."
+
+msgid "no_slots"
+msgstr "No execution slots"
+
+msgid "offline"
+msgstr "WORKER UNAVAILABLE"
+
+msgid "open_safety"
+msgstr "Open safety-only controls"
+
+msgid "operation"
+msgstr "Operation"
+
+msgid "outstanding"
+msgstr "Outstanding / unknown orders"
+
+msgid "overview"
+msgstr "Overview"
+
+msgid "pause"
+msgstr "Pause download"
+
+msgid "pause_entries"
+msgstr "Pause entries"
+
+msgid "pending_charges"
+msgstr "Pending charges"
+
+msgid "previous"
+msgstr "Previous"
+
+msgid "processing"
+msgstr "Request submitted. Waiting for durable worker receipt…"
+
+msgid "product_switch"
+msgstr "Structural edits use the context preview workflow."
+
+msgid "profit"
+msgstr "Closed profit"
+
+msgid "protection"
+msgstr "Protection / operation"
+
+msgid "reconcile_request"
+msgstr "Reply unavailable; inspect the original request before retrying."
+
+msgid "refresh"
+msgstr "Refresh snapshot"
+
+msgid "region"
+msgstr "Region policy"
+
+msgid "region_entity"
+msgstr "Verified service entity"
+
+msgid "release_gates"
+msgstr "Readiness evidence"
+
+msgid "report_empty"
+msgstr "No records in this report scope."
+
+msgid "report_scope"
+msgstr "Report environment"
+
+msgid "request_status"
+msgstr "Inspect last request"
+
+msgid "requested"
+msgstr "Requested configuration"
+
+msgid "restricted"
+msgstr "Vault / custody restrictions"
+
+msgid "retries"
+msgstr "Retries"
+
+msgid "retry"
+msgstr "Retry setup"
+
+msgid "retry_operation"
+msgstr "Retry blocked operation"
+
+msgid "risk"
+msgstr "Risk"
+
+msgid "risk_limits"
+msgstr "Execution risk limits"
+
+msgid "safety"
+msgstr "Safety controls"
+
+msgid "scope"
+msgstr "Consolidated authorized account scope"
+
+msgid "search"
+msgstr "Search"
+
+msgid "settings"
+msgstr "Settings"
+
+msgid "settled"
+msgstr "Settled assets at current marks"
+
+msgid "simulated"
+msgstr "SIMULATED"
+
+msgid "slots"
+msgstr "Asset slots"
+
+msgid "source"
+msgstr "Source context"
+
+msgid "spendable"
+msgstr "Active book spendable funds"
+
+msgid "stage"
+msgstr "Stage"
+
+msgid "start"
+msgstr "Start"
+
+msgid "status"
+msgstr "Status"
+
+msgid "stop"
+msgstr "Stop and reconcile"
+
+msgid "subtotal"
+msgstr "VERIFIED SUBTOTAL — NOT ALL ACCOUNTS"
+
+msgid "switch_note"
+msgstr "The old context drains and reconciles before the target initializes. Effective context changes only after verified STOPPED."
+
+msgid "switch_title"
+msgstr "Confirm context change"
+
+msgid "target"
+msgstr "Requested target"
+
+msgid "target_capital"
+msgstr "Target funded capital"
+
+msgid "throughput"
+msgstr "Throughput"
+
+msgid "time"
+msgstr "Time"
+
+msgid "trade_results"
+msgstr "Trade Results"
+
+msgid "unchanged"
+msgstr "Choose a proposed configuration to preview."
+
+msgid "unknown"
+msgstr "Unknown"
+
+msgid "unsettled"
+msgstr "Unsettled perpetual P&L"
+
+msgid "verified_scope"
+msgstr "VERIFIED SCOPE"

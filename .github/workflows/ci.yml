@@ -1,0 +1,61 @@
+name: coinfly validation
+on:
+  workflow_dispatch:
+  # push:
+  # pull_request:
+permissions:
+  contents: read
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.15"
+          python-version: "3.14.7"
+          enable-cache: true
+      - run: uv sync --locked --extra desktop --extra research --extra training
+      - name: Verify linked SQLite requirement
+        run: uv run python -c "import sqlite3; assert sqlite3.sqlite_version_info >= (3,51,3), sqlite3.sqlite_version"
+      - run: uv run ruff check src tests
+      - run: uv run mypy src/coinfly
+      - run: uv run python -m pytest -q
+      - name: Verify fail-closed doctor diagnostics
+        run: uv run python scripts/verify_doctor.py
+      - run: uv build --no-sources
+      - name: Inspect wheel payload
+        run: uv run python scripts/verify_artifact.py
+      - name: Compile macOS ARM64 native sources with vault access disabled
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S native -B build/native -DCMAKE_OSX_ARCHITECTURES=arm64
+          cmake --build build/native --config Release
+      - name: Compile Linux AMD64 neural sources
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/native --target coinfly_neural --config Release
+      - name: Compile Windows AMD64 native sources with vault access disabled
+        if: runner.os == 'Windows'
+        run: |
+          cmake -S native -B build/native -A x64
+          cmake --build build/native --config Release
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.15"
+          python-version: "3.14.7"
+      - run: uv sync --locked --extra desktop --extra research --extra training
+      - run: uv run pip-audit --local --skip-editable
+# CI validates source contracts. It does not sign, publish, enable live orders,
+# certify regional eligibility or substitute for native release evidence.

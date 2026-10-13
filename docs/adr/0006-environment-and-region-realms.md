@@ -1,0 +1,27 @@
+# ADR 0006 — Environment and region realms
+
+Status: accepted architecture; restrictive contracts implemented; live authorization, native credential enrollment and regional integrations blocked.
+
+Environment is a financial and credential realm. `SANDBOX` uses synthetic accounts and local paper mutation. `LIVE` requires separately authenticated account authority, service profile, product permission, execution scope, native signing access and explicit arm confirmation. Shadow, replay and static contract-test modes are sandbox run profiles, not alternate ways to construct a live engine. No simulated balance, learned context state or result becomes live capital during a switch.
+
+`EngineConfig` records a requested region policy separately from worker-produced `VerifiedBrokerProfile`. GLOBAL and GERMANY are application policy requests. They cannot establish legal counterparty, customer classification, residency or eligibility. The key-permissions response is a permission/portfolio surface, not a source of invented country or legal-entity fields. Regional evidence needs a certified authenticated broker channel, an account binding, service-specific identity and eligibility, evidence version, expiry and revocation handling.
+
+| Requested combination | Contract | Current source behavior |
+|---|---|---|
+| SANDBOX / GERMANY / SPOT | Local synthetic execution; GERMANY spot-only policy applies. | Default policy. New initialization/arming requires verified dataset readiness. |
+| SANDBOX / GLOBAL / SPOT | Local synthetic execution. | The integrated paper worker supports explicit snapshots/targets; no automatic production feed/model is wired. |
+| SANDBOX / GLOBAL / PERPETUAL | Synthetic margin and matching under separately qualified book rules. | Component models and flat handovers are tested. Worker dispatch/drain rejects `PERPETUAL_MARGIN_UNCERTIFIED`. |
+| Either environment / GERMANY / PERPETUAL | Reject under application policy. | Configuration/routing validators reject it. |
+| LIVE / allowed policy / SPOT | Authenticated service profile, least-privilege scope, certified gateway/native signer and explicit arm. | Unavailable; release gates and the live factory fail closed. |
+| LIVE / GLOBAL / PERPETUAL | Independently certified active derivatives gateway and eligible service profile, with prefunded margin book. | Unavailable. A verified Coinbase Germany GmbH binding is rejected independently of the GLOBAL selection. |
+| SANDBOX / SHADOW, REPLAY or CONTRACT_TEST | Separate non-live feed/backend qualification. | Current desktop worker rejects unqualified run profiles with `RUN_PROFILE_FEED_UNQUALIFIED`. |
+
+The application must display the actual attested service entity when such evidence exists. It must not permanently infer Coinbase Germany GmbH from GERMANY selection or locale. The source currently displays `LOCAL PAPER SIMULATOR` for a paper context and `UNVERIFIED` otherwise.
+
+Native credential metadata binds environment, verified profile, authority, portfolio, purpose and version. Observation credentials grant read access only; execution credentials require the narrowly certified trading capability. Persisted records contain opaque vault references, never a raw key or signing token. Sandbox has no live execution credential fallback. A pending Live→Sandbox change continues to use the old live realm for any permitted source drain until retirement; choosing SANDBOX cannot retroactively turn those obligations into synthetic fills.
+
+Factories and send/sign boundaries use immutable bindings. Production spot and optional static sandbox endpoints are separately allowlisted. Normal sandbox mutation is in-process paper execution. Perpetual endpoints require a certified gateway manifest. Neither changing a base URL nor selecting GLOBAL can create a permitted client. The read-only HTTP boundary rejects redirects and ambient credential/proxy/netrc/TLS settings.
+
+The source includes native Keychain/Credential Manager bridge code, but no signed binaries or reviewed producer identity/digest pins. Windows named-pipe authentication is now implemented in source but has not been qualified on Windows in this refactor session. [release_gates.py](../../src/coinfly/security/release_gates.py) therefore keeps native signing, regional evidence and live gateways disabled. The default shipped worker still lacks a production credential-enrollment/evidence provider; trusted service composition now has an implemented injection boundary. These missing integrations cannot be remedied by a user checkbox or a caller-supplied `verified` value.
+
+Implementation is in [config/models.py](../../src/coinfly/config/models.py), [credential_realms.py](../../src/coinfly/security/credential_realms.py), [region_attestor.py](../../src/coinfly/venues/coinbase/region_attestor.py), [capability_handshake.py](../../src/coinfly/venues/coinbase/capability_handshake.py), [adapter_factory.py](../../src/coinfly/venues/coinbase/adapter_factory.py) and [http_reader.py](../../src/coinfly/venues/coinbase/http_reader.py). See [test_context_boundaries.py](../../tests/architecture/test_context_boundaries.py), [test_context_credential_binding.py](../../tests/security/test_context_credential_binding.py), [test_regional_routing.py](../../tests/venues/test_regional_routing.py) and [test_http_boundary.py](../../tests/venues/test_http_boundary.py). Native limitations are detailed in [native-and-live-gates.md](../security/native-and-live-gates.md).

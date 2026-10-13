@@ -1,0 +1,15 @@
+include README.md AGENTS.md pyproject.toml uv.lock dev.sh Makefile
+recursive-include docs *.md
+recursive-include native *.mm *.cpp
+recursive-include packaging *.plist *.xml *.manifest *.md *.py *.spec
+recursive-include scripts *.py *.sh
+recursive-include assets *.png *.icns *.ico
+include native/CMakeLists.txt .github/workflows/ci.yml
+recursive-include tests *.py
+recursive-include tests/market/captures *.json *.jsonl
+recursive-include src/coinfly *.sql *.json *.po *.cpp py.typed
+global-exclude *.py[cod] .DS_Store
+prune .venv
+prune .mypy_cache
+prune .ruff_cache
+prune .pytest_cache
