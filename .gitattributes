@@ -1,0 +1,8 @@
+# Check text out with LF on every platform. Pinned digests (schema, manifests,
+# native sources) are computed over the committed bytes, so a CRLF checkout on
+# Windows would not match them.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary

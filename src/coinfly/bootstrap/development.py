@@ -166,7 +166,7 @@ class SourceDatasetInstaller:
             prepare_graph(staging, controls, progress)
             dataset = self._verified(staging, controls, progress)
             for name in ("graph.npz", "normalized/neurons.feather"):
-                with (staging / name).open("rb") as source:
+                with (staging / name).open("r+b") as source:  # Windows flushes only writable handles
                     os.fsync(source.fileno())
             _fsync_directory(staging / "normalized")
             _fsync_directory(staging)

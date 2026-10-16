@@ -46,8 +46,9 @@ def main() -> None:
             entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             entry.compress_type = zipfile.ZIP_DEFLATED
             entry.create_system = 3
-            # Keep launchers executable after extraction, with normalized modes.
-            permissions = 0o755 if path.stat().st_mode & 0o111 else 0o644
+            # Keep launchers executable after extraction, with normalized modes. Windows
+            # file modes carry no execute bit, so shell launchers are named explicitly.
+            permissions = 0o755 if path.stat().st_mode & 0o111 or path.suffix == ".sh" else 0o644
             entry.external_attr = (0o100000 | permissions) << 16
             archive.writestr(entry, data)
             source_files += 1
