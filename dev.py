@@ -108,7 +108,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run(prefix + ["-m", "pytest", "-q", "tests/ui", "--native-ui"])
         if args.command == "build":
             return run(prefix + [str(ROOT / "scripts/build_desktop.py")])
-        for command in (["-m", "ruff", "check", "src", "tests"], ["-m", "mypy", "src/coinfly"],
+        for command in (["-m", "ruff", "check", "src", "tests", "scripts", "packaging", "dev.py"],
+                        ["-m", "mypy", "src/coinfly"],
                         ["-m", "pytest", "-q"]):
             result = run(prefix + command)
             if result:

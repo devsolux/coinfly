@@ -1,7 +1,6 @@
-VERSION ?= 1.0.0
-
 # -----------------------------------------------------------------------------
-# GitHub — CLI auth, local repo init, gh repo create, push (override as needed)
+# GitHub — CLI auth, local repo init, gh repo create, push (override as needed).
+# Development, test and build commands live in dev.py / dev.sh, not here.
 # -----------------------------------------------------------------------------
 
 GITHUB_ORG  ?= devsolux
@@ -11,7 +10,7 @@ GITHUB_FULL ?= $(GITHUB_ORG)/$(GITHUB_REPO)
 GIT_REMOTE_SSH ?= git@github.com:$(GITHUB_FULL).git
 
 .PHONY: github-check github-auth git-init git-main github-initial-commit \
-	github-repo-create github-remote-ssh github-verify github-push github-bootstrap
+	github-repo-create github-remote-ssh github-verify github-push github-bootstrap github-run-ci
 
 github-check:
 	@command -v git >/dev/null 2>&1 || { echo "error: git is required"; exit 1; }
@@ -88,10 +87,10 @@ GITHUB_COMMIT_MSG ?=
 github-push: github-check
 	@git rev-parse --git-dir >/dev/null 2>&1 || { echo "error: not a git repository"; exit 1; }
 	@git remote get-url origin >/dev/null 2>&1 || { echo "error: no origin remote (run: make github-repo-create or github-remote-ssh)"; exit 1; }
-	@# Guard against a stale lock left by an interrupted git operation.
+	@# Never delete the lock automatically: another git process may still own it.
 	@if test -f .git/index.lock; then \
-		echo "warning: found .git/index.lock; removing stale lock"; \
-		rm -f .git/index.lock; \
+		echo "error: .git/index.lock exists; finish or stop the other git process, then retry"; \
+		exit 1; \
 	fi
 	@STAMP=$$(date +%Y%m%d-%H%M%S); \
 	git add -A; \
@@ -115,8 +114,6 @@ github-bootstrap:
 	@$(MAKE) github-repo-create
 	@$(MAKE) github-verify
 
-github-allow-action: github-check ## Repo setting: let the daily workflow open pull requests with github.token
-	gh api -X PUT repos/$(GITHUB_FULL)/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
-
-github-run-workflow: github-check ## Trigger the daily release refresh now (refresh, sign, three-OS verify, PR, auto-merge if enabled)
-	gh workflow run releases.yml --repo $(GITHUB_FULL)
+# Trigger the manual-only validation workflow (.github/workflows/ci.yml) on GitHub.
+github-run-ci: github-check
+	gh workflow run ci.yml --repo $(GITHUB_FULL) --ref main

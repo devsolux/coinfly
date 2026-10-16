@@ -413,7 +413,7 @@ def quality_gates(source: Path, python: Path, environment: dict[str, str], evide
     evidence.mkdir()
     commands = (
         ("shell", ["/bin/bash", "-n", str(source / "dev.sh")]),
-        ("ruff", [str(python), "-I", "-m", "ruff", "check", "src", "tests", "scripts", "dev.py"]),
+        ("ruff", [str(python), "-I", "-m", "ruff", "check", "src", "tests", "scripts", "packaging", "dev.py"]),
         ("mypy", [str(python), "-I", "-m", "mypy", "src/coinfly"]),
         ("pytest", [str(python), "-I", "-m", "pytest", "-q", "--native-ui",
                     f"--junitxml={evidence / 'pytest.xml'}"]),

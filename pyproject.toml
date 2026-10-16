@@ -51,7 +51,7 @@ where = ["src"]
 include = ["coinfly*"]
 
 [tool.setuptools.package-data]
-coinfly = ["py.typed", "storage/schema.sql", "i18n/locales/*/LC_MESSAGES/*", "research/manifests/*.json", "research/neural/kernel.cpp", "operations/*.json", "bootstrap/publisher/*.json"]
+coinfly = ["py.typed", "storage/schema.sql", "research/manifests/*.json", "research/neural/kernel.cpp", "bootstrap/publisher/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -299,7 +299,7 @@ case "$command_name" in
         exec "$coinfly_python" -I -m pytest -q tests/ui/test_native_desktop.py --native-ui ;;
     check)
         /bin/bash -n "$coinfly_root/dev.sh"
-        "$coinfly_python" -I -m ruff check src tests scripts
+        "$coinfly_python" -I -m ruff check src tests scripts packaging dev.py
         "$coinfly_python" -I -m mypy src/coinfly
         exec "$coinfly_python" -I -m pytest -q ;;
     locale)
