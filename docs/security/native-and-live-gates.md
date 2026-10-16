@@ -16,7 +16,7 @@ delivery does not include a signed native release or live exchange certification
 These gates are not operator configuration. No checkbox, environment variable,
 manually edited JSON, keystore alias, `INTX` permission string, or unsigned profile
 document turns them green. The compiled trust-anchor collections are deliberately
-empty. The source now contains a positive trusted-service Live spot mutation
+empty. The source contains a positive trusted-service Live spot mutation
 composition path, but the production enrollment/evidence provider is not supplied.
 No default source launch is a qualified live release. A live
 adapter also needs the authority's durable old-context STOPPED/retirement proof
@@ -41,8 +41,9 @@ packaged bridge, checks a release-pinned hash, then requires the native identity
 check. Empty signing pins deny use. The native execution-vault bridge remains
 unimplemented on Linux; this does not exclude Linux desktop paper operation or
 its separately scoped Secret Service setup storage. All native execution bridges
-require target-host release qualification. CMake is a
-release-build tool only; application startup never runs a compiler.
+require target-host release qualification. CMake is used only by explicit
+build commands (release builds and the local `kernel` research build);
+application startup never runs a compiler.
 Frozen bridge lookup starts at absolute `sys._MEIPASS`; resolved binaries must
 remain inside that bundle root. Internal PyInstaller relocation links are
 supported, external links are rejected. This corrects resource lookup without
@@ -103,9 +104,10 @@ does not attest a particular account. ([Coinbase EEA agreement](https://www.coin
 Registered endpoints are immutable. The HTTP reader is GET only, uses the pinned
 `certifi` CA bundle, constructs fresh connections, rejects redirects and arbitrary
 query parameters, and has no SDK, proxy, netrc, cookie/session or automatic retry
-path. No production perpetual hostname is fabricated: the published migration
-guide still describes cutover as coming soon, so the active account gateway must
-be independently certified. ([Coinbase derivatives overview](https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/guides/derivatives/overview))
+path. No production perpetual hostname is fabricated: when last reviewed
+(September 2026) the published migration guide described the cutover as coming
+soon, so the active account gateway must be independently certified and the
+guide re-checked before any release. ([Coinbase derivatives overview](https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/guides/derivatives/overview))
 
 ## Read-only account and model boundaries
 
@@ -131,10 +133,8 @@ OS sandbox is certified; a Python subprocess is not treated as a security sandbo
 
 The test suite uses synthetic identities, generated ephemeral test keys and
 in-process fake transports. It performs no live trades or real credential reads.
-Primary documentation was reviewed on 18 September 2026 and the API key
-authentication, List Accounts and key permissions pages again on 21 September
-2026; public API facts do not replace deployment qualification or account
-authorization.
+Coinbase documentation was last reviewed on 21 September 2026; public API facts
+do not replace deployment qualification or account authorization.
 
 ## Production distribution modes
 
@@ -145,6 +145,6 @@ Mechanical ARM64 ad-hoc signatures confer no Developer ID/team, notarization or
 financial authority. Unsigned production currently has no qualified bundled
 kernel verification path; it must fail the relevant acceptance gate rather than
 mint signed authority or use a local development kernel. Missing/invalid bundled
-production kernels no longer fall back to `models/kernels` development candidates.
+production kernels never fall back to `models/kernels` development candidates.
 The signed provenance producer and complete enclosing-app/running-process
-verification also remain release work. See [the issue ledger](../devsh-production-builds.md).
+verification also remain release work. See [macOS production builds](../devsh-production-builds.md).

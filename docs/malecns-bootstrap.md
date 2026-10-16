@@ -14,13 +14,14 @@ compile native code at runtime, download code, or import pickle. Scientific
 parameter changes require a separate qualified profile.
 
 The target-weight mapping is separately named `fixed-decoder-spot-step-v1`.
-BUY increases only the selected instrument's previous target by at most 0.10 of
-strategy weight, using unallocated weight; SELL decreases only that instrument's
-target by at most 0.10. HOLD and an exhausted permitted change emit no proposal.
+BUY increases only the selected instrument's previous target by at most
+`ExecutionSettings.target_step` of strategy weight (default 0.05, never above the
+0.05 `max_turnover_fraction`), using unallocated weight; SELL decreases only that
+instrument's target by at most the same step. HOLD and an exhausted permitted change emit no proposal.
 An explicit sell-to-zero emits the complete zero target vector. The mapping does
 not inspect prices, balances, P&L, margin, signer state or broker routes. It never
-sells a different asset to make room. Perpetual neural allocation is unavailable
-until its own mapping is declared and qualified. This is an engineered mapping,
+sells a different asset to make room. Paper perpetuals use the separately named long/short
+`fixed-decoder-derivatives-step-v1` mapping. This is an engineered mapping,
 with no demonstrated profitable learning.
 
 `MemoryBrain.restore` first bounds ZIP/NPY expansion and validates exact array
@@ -52,8 +53,9 @@ bootstrap with isolated SANDBOX/PAPER execution. It creates no publisher keys,
 signatures, dataset readiness or live attestation. See
 [desktop packaging](../packaging/README.md).
 
-Release startup now loads `coinfly/bootstrap/publisher/trust-root.json` and
-`manifest.json` from the application package. Frozen builds use the absolute
+Release startup loads `coinfly/bootstrap/publisher/trust-root.json` and
+`manifest.json` from the application package. That directory is not in the
+source tree; the release build specs stage it from reviewed publisher inputs. Frozen builds use the absolute
 PyInstaller `sys._MEIPASS` root; source/wheel builds use the module's absolute
 directory. There is no runtime search of the working directory, user storage,
 environment or network for a trust root. OS code signing seals packaged resources;
@@ -130,7 +132,7 @@ and resource-pressure controls are cooperative. These operations own no ledger,
 execution engine, fill consumer or guardian. A completed transfer remains
 unready until verification and activation finish. Dataset READY attests only the
 data; native neural execution also requires an independently attested prebuilt
-binary on the qualified macOS ARM64 or Windows AMD64 host.
+binary on a qualified macOS ARM64, Windows AMD64 or Linux AMD64 host.
 
 The automated checks cover cryptographic tampering, root/manifest failure,
 rollback/equivocation, exact source locks, forbidden paths/origins, resumable

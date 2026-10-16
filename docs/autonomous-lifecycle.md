@@ -14,10 +14,10 @@ overwritten by another instrument's observation; `tests/worker/test_multi_slot_n
 — bounded by the strategy's compute budget → publish an immutable status
 snapshot. `status()` returns the last published
 snapshot and `pause_entries`/`stop` only bump the control generation, so the compute phase does not itself hold the control lock
-(`tests/worker/test_automation_liveness.py`). Catalogue refresh, controller
+(`tests/worker/test_automation_liveness.py`). Catalog refresh, controller
 construction and synchronous live dispatch still include blocking work under
 control/interlock boundaries. No target-hardware response-time guarantee or
-separate NeuralHost process is claimed by this delivery. A result whose tokens no longer
+separate NeuralHost process is claimed. A result whose tokens no longer
 match is discarded with a named reason (`DISCARDED_ENTRIES_PAUSED`,
 `DISCARDED_GENERATION_CHANGED`, `DISCARDED_STATE_GENERATION_CHANGED`,
 `DISCARDED_OBSERVATION_STALE`, …) and the slot's neural state is restored to
@@ -75,6 +75,20 @@ at most 25, polled with a 1 s pause between sweeps so every book stays inside
 the observation age; WebSocket level2: 30). Each tick applies at most one book update per instrument to the paper
 venue (the latest), because a level2 stream can change a book hundreds of
 times per second and every paper update is a journaled transaction.
+
+Feed health fails closed:
+
+* A lost connection (peer close, silent timeout, protocol error) drops every
+  book, so nothing decides on the old connection's data while it reconnects.
+* The WebSocket feed reports `CONNECTED` only once every subscribed product
+  has a level2 snapshot (`CONNECTING` names the products still pending) and
+  stays `DEGRADED` after a heartbeat gap until heartbeats are consecutive again.
+* Reconnects back off from 1 s to at most 30 s, jitter included, and start
+  again at 1 s after a connection that stayed up for 30 s.
+* `sequence_gaps` counts venue sequence gaps reported by the sequence tracker.
+* A replay file must be chronological (`REPLAY_NOT_CHRONOLOGICAL`) with
+  strictly increasing sequences per instrument (`REPLAY_SEQUENCE_NOT_MONOTONIC`);
+  a recording that restarts its sequences is refused at load.
 
 ## Commands (RPC)
 
@@ -152,10 +166,12 @@ currencies, market-data requirements (max age, depth, warm-up, window),
 universe filters (tradable, spread, top-of-book notional, volume, order),
 `max_active_slots`, `capital_budget`, per-slot exposure fraction, execution
 settings (below), derivative permissions (leverage ≤ 10, directions, margin
-mode, reversal), `learning_enabled` (research mode only), permitted
+mode, reversal; `margin_mode` and `max_maintenance_utilization` are stored and
+digested but not yet enforced, since the paper book uses one pooled linear
+margin), `learning_enabled` (research mode only), permitted
 environments, `excluded_instruments` (operator exclusions, rejected as
-`EXCLUDED_BY_OPERATOR`; overlap with the permitted list is invalid). Schema 2
-adds the fields listed below with defaults, so a schema-1 JSON still loads. The
+`EXCLUDED_BY_OPERATOR`; overlap with the permitted list is invalid). Only
+strategy schema 3 is accepted; any other `schema_version` is rejected, not upgraded. The
 full JSON is stored in `cf_automation.config_json`; its digest is shown in status.
 
 Execution settings (`ExecutionSettings`):
@@ -322,8 +338,7 @@ runs; nothing is chosen for the operator and nothing learns silently:
 | `RESEARCH_LEARNING` | fresh qualified graph, plastic under `neural.training` (`TrainingProfile` + `RiskRewardConfig` built from the declared overrides) | `learning_enabled=true`, research mode, SANDBOX, the preserved controller, exactly one slot, `training.reward_interval_seconds == execution.accounting_interval_seconds` | `FRESH_QUALIFIED_GRAPH`, plus the full training/risk profiles |
 
 `learning_enabled` is exactly the `RESEARCH_LEARNING` mode (both directions);
-the pre-existing path that ran the baseline propagator "with learning" but no
-rewards is gone. Refusals are explicit: `CHECKPOINT_NOT_FOUND`,
+there is no "learning" mode without rewards. Refusals are explicit: `CHECKPOINT_NOT_FOUND`,
 `CHECKPOINT_PROFILE_MISMATCH`, `CHECKPOINT_NEURAL_PROFILE_MISMATCH`,
 `CHECKPOINT_NOT_FROZEN`, `CHECKPOINT_PROVENANCE_MISMATCH`,
 `RESEARCH_MODE_REQUIRED`, `RESEARCH_LEARNING_SANDBOX_ONLY`,
@@ -365,7 +380,7 @@ stays `CLOSED` for the next observation. Evidence:
 `tests/strategy/test_research_controller.py`,
 `tests/strategy/test_reward_ledger.py`, `tests/worker/test_research_session.py`
 (synthetic full-graph-shaped controller: worker mechanics, not neural
-behaviour) and `tests/strategy/test_checkpoint_modes.py`.
+behavior) and `tests/strategy/test_checkpoint_modes.py`.
 
 ## Neural resources and multi-slot isolation
 
@@ -406,8 +421,7 @@ component reuse; strategy name/version alone cannot conceal a changed plan.
 
 `tests/storage/test_component_schema.py` and `tests/refactor/` cover final-format
 installation/reopen, legacy rejection, structure tampering, capital/action scope,
-mandates and deferred-frame ownership. The current session did not open production
-ledgers or bypass the linked SQLite requirement. Scientific v2/v3 profile IDs and
+mandates and deferred-frame ownership. Scientific v2/v3 profile IDs and
 checkpoint provenance remain distinct from application persistence.
 
 **Where the desktop shows it.** Overview's automation panel renders the

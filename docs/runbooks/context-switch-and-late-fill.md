@@ -20,7 +20,7 @@ For a normal structural change:
 | Changed source fact sequence or invalidated retirement after the stop barrier | Preserve the authority fence and follow the late-fact recovery procedure. A fresh certificate alone cannot repair invalidated retirement. |
 | `FAILED_INITIALIZATION` | Remain stopped and fenced. Correct the target's actual missing prerequisite, then explicitly retry the existing operation. The source does not automatically resume. |
 | Missing/corrupt MaleCNS assets | New initialization and Arm remain blocked. `state.snapshot`, history, `safety.pause_entries`, `safety.stop` and reconciliation remain available. Cancelling a download does not stop the engine. |
-| `PERPETUAL_MARGIN_UNCERTIFIED` | The current worker cannot safely dispatch this track. Preserve the gate; a tested synthetic margin component is not the required integrated risk evidence. |
+| `PERPETUAL_MARGIN_UNCERTIFIED` | No margin model matching the context's broker profile is bound, so the track cannot be armed or dispatched. Paper perpetual contexts bind the synthetic `PaperLinearMarginModel`; no live margin model exists. Preserve the gate. |
 
 `safety.pause_entries` persists an admission fence. `safety.stop` requests protected slot drains or joins/retries the current context operation while the supervisor stays alive. Existing slot Stop, Delete or Edit operations are joined, and a blocked slot does not prevent independent slots from receiving their stop commands. Inspect both the returned operations and per-slot errors; failed commands retain their identity and produce an alarm/history event when persistence is available. A Stop response acknowledges the operation, not guaranteed immediate flatness. Start enables slot scheduling without forcing a purchase. Delete and instrument Edit leave the source visible while draining; after proof, Edit creates a new STOPPED replacement and requires a separate Start. Follow the existing operation rather than repeatedly issuing conflicting edits.
 
@@ -33,7 +33,7 @@ If a newly discovered old-context fill appears after retirement:
 
 After a crash, the worker converts possibly dispatched work into UNKNOWN where required, restores the committed paper book without reseeding, discards market freshness, and starts unarmed/fenced. A database restore cannot rewind venue activity. External-host fencing and reconciliation of activity missing from a restored database are mandatory prerequisites for a future live recovery; no source command currently certifies them.
 
-The September audit makes repeated terminal evidence idempotent: a price update
+Repeated terminal evidence is idempotent: a price update
 alone cannot advance the financial fact sequence for an already terminal order.
 An actual new fill still advances it and invalidates old proof. Context and slot
 drains share one planner within each paper engine; they cannot cancel one another's

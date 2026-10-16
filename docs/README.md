@@ -2,12 +2,12 @@
 
 ## Development and operation
 
-- [Current-session validation evidence](evidence-matrix.md)
+- [Validation evidence (latest run)](evidence-matrix.md)
 - [Desktop setup, credentials and application storage](desktop-initialization-and-settings.md)
 - [Implemented capabilities and remaining gates](implementation-status.md)
 - [Verification and package builds](validation.md)
 - [Native release assembly](../packaging/README.md)
-- [Production build commands and current validation](devsh-production-builds.md)
+- [macOS production builds: status and open work](devsh-production-builds.md)
 - [Context switching, recovery and late fills](runbooks/context-switch-and-late-fill.md)
 - [Regional attestation and incomplete balances](runbooks/regional-attestation-and-balance-gaps.md)
 - [Initialization root cause and recovery](runbooks/initialization-root-cause.md)

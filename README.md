@@ -29,8 +29,8 @@ Each worker tick runs these separate stages for every strategy-owned slot:
    descending neurons as BUY, SELL or HOLD. A HOLD is never replaced by a
    scripted trade.
 5. **Map** – a fixed mapping moves only the chosen instrument's target weight,
-   by at most 0.10 of strategy capital for spot. Paper perpetuals use a separate
-   signed mapping.
+   by at most the configured step (default 0.05 of strategy capital, never above
+   the 0.05 turnover limit). Paper perpetuals use a separate long/short mapping.
 6. **Admit** – an exact Decimal planner, turnover guard and risk actor check
    capital, exposure, drawdown and loss limits. Risk may reject an order; it
    never chooses a different one.
@@ -51,7 +51,7 @@ and [plasticity kernel](docs/malecns-rstdp-kernel.md).
 
 | Area | Supported | Not supported or not yet qualified |
 | --- | --- | --- |
-| Platforms | macOS ARM64, Windows AMD64, Linux AMD64 from source; Python ≥3.11 with SQLite ≥3.51.3 | Only Linux kernel build/load and component tests ran; Windows/macOS native runs and full-graph desktop operation were not exercised |
+| Platforms | macOS ARM64, Windows AMD64, Linux AMD64 from source; Python ≥3.11 with SQLite ≥3.51.3 | Latest recorded run is macOS ARM64 lint, type checks, tests and package build ([validation evidence](docs/evidence-matrix.md)); no native desktop smoke test, full-graph run or Windows/Linux native run is recorded |
 | Execution | Paper (SANDBOX) trading with an exact local ledger: spot and synthetic perpetuals | Real-money trading; live mode is closed by default |
 | Venue | Coinbase public market data (no credentials); live Advanced Trade spot code path | Live spot qualification (enrollment, signing, account evidence); live derivatives; other exchanges |
 | Market data | Coinbase public REST and WebSocket level2, JSON-lines replay, labeled synthetic fixtures | — |
@@ -67,7 +67,7 @@ The full matrix is in [implementation status](docs/implementation-status.md) and
 
 ## Native development
 
-Use native Python >=3.11 linked to **SQLite >=3.51.3**, with Tk, uv and the
+Use native Python ≥3.11 linked to **SQLite ≥3.51.3**, with Tk, uv and the
 locked dependencies. A native C++ toolchain and CMake are needed for the explicit
 local research kernel build, not for ordinary application startup.
 

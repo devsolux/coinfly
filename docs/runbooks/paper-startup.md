@@ -3,7 +3,7 @@
 For the fresh 1.0.0 format and all three desktop targets, use `python dev.py setup`,
 `prepare`, `kernel`, then `run`. Native Python/Tk and linked SQLite >=3.51.3 are
 required. Mac-specific `dev.sh` examples below are convenience equivalents.
-See [refactor evidence](../evidence-matrix.md): a scripted cycle is not a
+See [validation evidence](../evidence-matrix.md): a scripted cycle is not a
 full-graph or native desktop qualification. Legacy ledgers are not migrated.
 
 Everything here runs without an exchange credential. `./dev.sh run` remains
@@ -41,15 +41,19 @@ and applies the configured paper funding **once** for the new book
 
 Overview → *Strategy automation*:
 
-* Strategy: `research-paper-spot` (RESEARCH ONLY; preserved controller, spot
-  step mapping, step 0.05, 3 slots, budget 100).
+* Strategy: `malecns-autonomous` (preserved MaleCNS controller as baseline
+  inference or a frozen checkpoint; step mapping with `target_step` 0.05 and
+  the `CONSTRAIN` turnover policy; capital and slot limit set in the panel).
+  This preset never learns; research learning needs an explicit research
+  strategy definition.
 * Data source — labeled truthfully everywhere:
   * `COINBASE_PUBLIC_WEBSOCKET` — public level2 + heartbeats, sequence-gap
     resync, bounded reconnects (real market data, no credential).
   * `COINBASE_PUBLIC_REST` — polled public order book (real market data).
-  * `SYNTHETIC_FIXTURE` — deterministic scripted books (`NOT MARKET DATA`).
   * `REPLAY_FILE` — a JSON-lines recording under
     `~/.devsolux/coinfly/datasets/replays/<name>` (`REPLAYED RECORDING — NOT LIVE`).
+  * `SYNTHETIC_FIXTURE` (deterministic scripted books, `NOT MARKET DATA`) is
+    for tests and explicit pipeline test mode only; the panel does not offer it.
 * Approved capital (≤ the strategy budget), *Auto-manage slots*, *Research
   mode* (only then can a research strategy learn).
 
@@ -57,8 +61,9 @@ Overview → *Strategy automation*:
 the context (confirmation dialog) and starts the worker-owned loop. The panel
 then shows component readiness, the data source health (state, last message,
 gaps, reconnects, resyncs), the selected universe with rejection reasons, the
-last observation, the last decision with its reason (scripted fixtures say
-`PIPELINE FIXTURE`), execution health (open intents, unknown outcomes, fills,
+last observation, the last decision with its reason (a scripted controller is
+tagged `PIPELINE FIXTURE` in the strategy line, and explicit pipeline test mode
+adds `PIPELINE TEST MODE`), execution health (open intents, unknown outcomes, fills,
 fence) and the owned slots (strategy, selection reason, lifecycle, ownership,
 target weight, actual quantity, budget, warm-up, last decision, blocking
 reason).
@@ -107,8 +112,11 @@ reduce-only enforcement and a synthetic settlement schedule per declared
 subtype: funding at every interval boundary the clock crosses
 (`PERPETUAL_NO_EXPIRY` every 8 h, `PERPETUAL_STYLE_FUTURE` hourly) at the
 declared rate `PAPER_FUNDING_RATE_PER_INTERVAL` (1 bp, long pays), and cash
-settlement of a `DATED_FUTURE` at its catalog expiry at the mark — each event
-journaled (`PAPER_FUNDING`, `PAPER_EXPIRY_SETTLEMENT`) and listed in
+settlement of a `DATED_FUTURE` at its catalog expiry at the mark. Funding is
+journaled as `PAPER_FUNDING`. Expiry closes the position through the ledger as
+one fee-free synthetic fill (so lots, positions, cash, drawdown and stop proofs
+all agree), recorded as a `PAPER_EXPIRY_SETTLEMENT` event and labeled with the
+intent cause `VENUE_SETTLEMENT`, never as a strategy trade. Both appear in
 `automation.status.settlements` as synthetic. None of this is presented as
 venue behavior.
 
@@ -117,8 +125,8 @@ venue behavior.
 The development worker runs in the background and keeps running after the
 desktop closes (it owns the paper book). When the checkout changes (a pull, an
 edit, a patch), a worker started before the change runs the previous code: the
-desktop reports `WORKER BUILD MISMATCH` and the worker refuses every command
-with `WORKER_BUILD_MISMATCH`. `./dev.sh run` and `./dev.sh worker` now detect
+desktop shows `STALE WORKER` next to the context caption and the worker
+refuses every command with `WORKER_BUILD_MISMATCH`. `./dev.sh run` and `./dev.sh worker` detect
 this through the `worker.hello` handshake and retire that worker first
 (gracefully: automation stopped, paper orders/positions drained), then start a
 current one; the successor waits for the predecessor's authority lock
@@ -133,7 +141,7 @@ through the protected drain and releases the budget. After a worker restart the
 panel shows `RESTART_REQUIRES_REENABLE`; *Enable automation* re-applies the same
 configuration (no new funding) and arms it once READY.
 
-## What is demonstrated (container evidence, 2026-09-21)
+## Automated coverage
 
 `tests/worker/test_automation_lifecycle.py` drives the real supervisor through
 configure → enable → universe → owned slot → warm-up → BUY → fill → HOLD →

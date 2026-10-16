@@ -109,7 +109,7 @@ denominator; zero signals do not. `missing_credit_alert` is true strictly above
 1%. The existing feasibility requirement remains zero missing-credit reward
 windows; the alert is not a relaxed acceptance threshold.
 
-## Four objectives, capacity penalty and hard saturation pruning
+## Four objectives, capacity penalty and saturation trial pruning
 
 `ExecutionDiagnostics` reports BUY/SELL attempts, capacity denials, other neural
 admission denials, HOLD count, reward pulses and credit-delay violations per phase.
@@ -190,11 +190,10 @@ The executable runner remains `scripts/optimize_malecns.py`, using sequential
 Optuna TPE, repeated seeds, persistent SQLite and the sealed holdout registry.
 Its default v2 study name is `malecns-risk-v2-capacity`; schema 4 fingerprints
 the code, reward horizon and penalty settings. `implementation_fingerprint()`
-now covers every module under `coinfly/research` plus `neural/kernel.cpp`
-(previously twelve hand-listed files omitted `profile.py`, `neural/circuit.py`,
-`neural/visual.py` and the kernel source, so decoder-threshold or compartment
-changes did not change the contract). Studies persisted before this change
-therefore refuse resume; their trials keep their recorded provenance. The
+covers every module under `coinfly/research` plus `neural/kernel.cpp`, so a
+decoder-threshold or compartment change also changes the contract. Studies
+persisted under a different fingerprint refuse resume; their trials keep their
+recorded provenance. The
 contract records the ordered objective names/directions and all five
 reinforcement coordinate definitions from the same constants used by the
 sampler. Objective order follows
@@ -219,7 +218,7 @@ What changes is the claim discipline:
   estimation precision with `--win-rate-precision p`, which requires
   `ceil((1.96 / 2p)^2)` executed validation decisions (97 at p = 0.1), half as
   many completed round trips and as many nonzero training reward pulses.
-  `--evidence-credit COVERAGE MASS` sets the minimum fraction of nonzero reward
+  `--evidence-credit COVERAGE RETAINED_MASS` sets the minimum fraction of nonzero reward
   pulses whose allocations reached a retained tag and the minimum median
   retained credit mass after `exp(-delay/credit_tau_seconds)` decay. There is
   no default; v3 refuses to run without them.
@@ -241,7 +240,7 @@ What changes is the claim discipline:
   they exert no selection pressure toward a convenient control. Compute cost
   doubles.
 * **Measured, not corrected.** `training_evidence` and `validation_evidence`
-  now report, per phase: decoded BUY/SELL, admitted and executed decisions,
+  report, per phase: decoded BUY/SELL, admitted and executed decisions,
   BUY/SELL fills and completed round trips (lower bound `min(buys, sells)`),
   HOLD count and fraction, action entropy, capacity and execution-side denials,
   exposed and accounted windows, turnover, nonzero pulses, allocations,

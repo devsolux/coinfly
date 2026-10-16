@@ -41,7 +41,7 @@ unexpired mandate (`LIVE_MANDATE_REQUIRED`) **in addition to** every other gate.
 
 `live.prerequisites` lists every unsatisfied item together; nothing is hidden
 behind an earlier item. The same list is what `automation.enable` and the
-worker's engine factory refuse on: `LIVE_TRANSPORT_UNAVAILABLE: <all missing
+worker's engine factory refuse on: `LIVE_PREREQUISITES_UNSATISFIED: <all missing
 codes>` names every missing prerequisite in one error, and
 `LIVE_DERIVATIVES_ENGINE_UNAVAILABLE` says that no live engine exists for a
 derivatives track at all. The mandate (item 11) is therefore never "the last

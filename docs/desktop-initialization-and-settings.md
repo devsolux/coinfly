@@ -17,7 +17,6 @@ Windows uses authenticated named pipes rather than Unix sockets. The Win32
 implementation and Linux Secret Service setup backend require native desktop
 qualification; Linux native execution signing is still missing.
 
-
 `./dev.sh run` opens the explicitly labeled local paper desktop. Its worker uses
 `~/.devsolux/coinfly/storage/development/<checkout-id>/` and a checkout-specific Unix socket, so it cannot
 silently attach to the signed-release worker or its ledger. `./dev.sh worker`
@@ -33,8 +32,9 @@ and sensory-projection algorithm rebuilds all 166,700 retained neurons and
 25,582,938 edges, including weak and self edges. Every array must match
 `arrays.lock.json`; normalized transmitter values and neuron order must also
 verify. Only then is staging atomically activated and the dataset marked READY.
-Subsequent startups reverify the cache offline. Allow at least 3.2 GB free disk
-space and several GB of RAM for preparation. Downloads resume after interruption;
+Subsequent startups reverify the cache offline. Allow at least 3.3 GB free disk
+space (the ≈1.1 GB source download plus a 2 GiB working margin) and several GB
+of RAM for preparation. Downloads resume after interruption;
 Resume continues a paused operation without starting a second installer.
 
 This uses a distinct `LOCAL_SOURCE_LOCKS` capability. It creates no signing key,
@@ -56,7 +56,7 @@ and move its digest directory aside before rerunning preparation.
 
 ## Application data on Linux, macOS and Windows
 
-`ApplicationPaths` resolves the native account home: the account database on Linux/macOS
+`ApplicationPaths` resolves the native account home: the OS account database on Linux/macOS
 and `SHGetFolderPathW(CSIDL_PROFILE)` on Windows. It ignores `HOME`, `USERPROFILE`,
 `APPDATA`, and the current working directory. The root is
 `/Users/<user>/.devsolux/coinfly` on macOS or
@@ -80,7 +80,7 @@ account profile rather than an environment override.
 | `authority-locks/` | Signed-worker authority ownership locks |
 
 Model loading/checkpoint APIs and user-selected report exports still take explicit
-paths; this change does not auto-load binaries, create checkpoints or move explicit
+paths; Coinfly does not auto-load binaries, create checkpoints or move explicit
 output destinations. Development build/test/Python caches are not application data.
 Short macOS Unix sockets stay in the private OS temporary directory because of the
 Unix socket path limit. Windows IPC qualification is still a separate release gate;

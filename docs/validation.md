@@ -11,7 +11,11 @@ Windows AMD64 or Linux AMD64; macOS also retains `./dev.sh setup`.
 ```
 
 `check` runs shell syntax, Ruff, strict mypy and the test suite. Native widget
-tests are opt-in through `test-ui`. `prepare` verifies the real full MaleCNS cache
+tests are opt-in through `test-ui`. On macOS, `./scripts/verify_local.sh` runs
+`check`, `test-ui` and the research suite, writes logs under
+`build/verification/<timestamp>/` and exits non-zero if any step fails
+(`--no-ui` skips the native widget tests). The latest recorded run is in
+[validation evidence](evidence-matrix.md). `prepare` verifies the real full MaleCNS cache
 or downloads and prepares the pinned sources when absent; it succeeds only at
 READY. Unit tests use small, explicitly synthetic graphs and paper execution.
 
@@ -19,7 +23,7 @@ Portable source checks (including Windows PowerShell):
 
 ```sh
 uv sync --locked --extra desktop --extra research --extra training
-uv run ruff check src tests scripts
+uv run ruff check src tests scripts packaging dev.py
 uv run mypy src/coinfly
 uv run python -m pytest -q
 uv run python scripts/verify_doctor.py
@@ -61,8 +65,8 @@ gates; the signed mode additionally validates the environment-resolved identity,
 notary profile, signing, notarization and stapling. No signing flags are required.
 Unset/empty signing values use the exact defaults in `dev.sh`; unsigned mode
 ignores these inherited values. Missing publisher metadata never falls back.
-See [native release assembly](../packaging/README.md) and the
-[current change's issue/validation ledger](devsh-production-builds.md).
+See [native release assembly](../packaging/README.md) and
+[macOS production builds](devsh-production-builds.md).
 
 The regression suite exercises real Bash default resolution/quoting/exit statuses,
 nonrecursive wrappers, mode-specific credential access, exact toolchain matching,

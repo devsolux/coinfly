@@ -1,8 +1,9 @@
 # Coinfly 1.0.0 implementation status
 
-This table describes the refactored source, not a claim of completed native or
-live qualification. The [current-session evidence](evidence-matrix.md) distinguish implementation from
-execution. The application remains **1.0.0** and uses a fresh-install format.
+This table describes the implemented source, not a claim of completed native or
+live qualification. [Validation evidence](evidence-matrix.md) separates what is
+implemented from what has actually been run. The application is **1.0.0** and
+uses a fresh-install format.
 
 | Area | Implemented source | Remaining work / qualification |
 | --- | --- | --- |
@@ -15,14 +16,13 @@ execution. The application remains **1.0.0** and uses a fresh-install format.
 | Paper | Existing stateful exact ledger/fills/drain/research boundaries, integrated automatic slots and scoped planning | Full-graph replay/realtime paper demonstration and long-running recovery tests in the qualified runtime |
 | Live spot composition | Positive trusted-service transport factory, supervisor dependency injection, context recovery, independent account/order/fill maintenance, scoped pagination and live mandate checks | Production enrollment/evidence provider and release artifact supply; actual account/route qualification; remaining blocking-send architecture |
 | Cancellation and account truth | A cancel acknowledgement does not release reservations; reconciliation establishes terminal facts; incomplete account evidence invalidates readiness; cash subtotal labeled as cash | Real venue qualification, scope/placement coverage verification and worst-case reconciliation testing |
-| Regional/derivative routing | Existing capability resolver and distinct product contracts; existing synthetic paper derivative model | Germany/Global entitlement evidence, route verification, live derivative gateway/engine and exact venue economics |
+| Regional/derivative routing | Existing capability resolver and distinct product contracts; existing synthetic paper derivative model | Germany/Global entitlement evidence, route verification, live derivative gateway/engine and exact venue economics; enforcement of the declared `margin_mode` and `max_maintenance_utilization` strategy fields |
 | Secrets | Explicit Keychain, Credential Manager and Linux Secret Service setup backends; no plaintext fallback | Linux native execution-vault bridge; genuine signing/enrollment qualification on all targets |
-| Packaging and CI | Existing macOS signing builder; common desktop/worker entry point; Windows/Linux paper development spec; three-target CI triggers | Actual locked CI runs, signed Windows/Linux production installers and platform-specific native qualification |
+| Packaging and CI | Existing macOS signing builder; common desktop/worker entry point; Windows/Linux paper development spec; three-target CI matrix (manual `workflow_dispatch` only) | Actual locked CI runs, signed Windows/Linux production installers and platform-specific native qualification |
 
 `python dev.py run` is explicitly local paper development. A verified dataset,
 local kernel, stored credential or successful read-only connection test does not
 qualify live execution. The default Live path still requires real trusted
 composition and independently verified release/account authority.
 
-A separately authorized live qualification exercise has not been performed.
-There is no claim that all work packages in the previous refactor plan are complete.
+No live qualification exercise has been performed.
