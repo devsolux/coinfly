@@ -76,7 +76,7 @@ class ContextContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / "src" / "coinfly"
         bad = {"dotenv", "pydantic_settings", "coinbase_agentkit", "coinbase.rest"}
         for path in root.rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text())):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 modules = ([a.name for a in node.names] if isinstance(node, ast.Import)
                            else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
                 for module in modules:
@@ -87,7 +87,7 @@ class ContextContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / "src" / "coinfly" / "ui"
         forbidden = ("sqlite3", "coinfly.storage", "coinfly.execution", "coinfly.security", "coinfly.venues")
         for path in root.rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text())):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 modules = ([a.name for a in node.names] if isinstance(node, ast.Import)
                            else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
                 self.assertFalse(any(m == f or m.startswith(f + ".") for m in modules for f in forbidden),

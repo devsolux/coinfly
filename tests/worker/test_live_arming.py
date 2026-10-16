@@ -8,7 +8,6 @@ closed gate.
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -21,7 +20,6 @@ from coinfly.bootstrap.manager import BootstrapManager
 from coinfly.config.models import EngineConfig, default_config
 from coinfly.domain.context import DomainError, Environment, ProductTrack, RunProfile
 from coinfly.domain.products import ProductSubtype
-from coinfly.ipc.auth import PeerIdentity
 from coinfly.ipc.protocol import OWNER_METHODS, READ_METHODS, RPCRequest
 from coinfly.operations.live_arming import (
     MANDATE_STATEMENT,
@@ -32,6 +30,7 @@ from coinfly.operations.live_arming import (
 from coinfly.venues.capability import LocalQualifications
 from coinfly.worker.paths import WorkerPaths
 from coinfly.worker.supervisor import WorkerSupervisor
+from tests.support import local_peer
 
 NOW = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
 
@@ -100,7 +99,7 @@ class WorkerLiveRpcTests(TestCase):
     def rpc(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         request = RPCRequest.parse({"jsonrpc": "2.0", "id": method, "method": method, "params": params or {}, "epoch": 0,
                                     "deadline_ms": int(time.time() * 1000) + 10000})
-        return cast(dict[str, Any], self.worker.handle(request, PeerIdentity(uid=os.getuid(), gid=os.getgid(), pid=os.getpid())))
+        return cast(dict[str, Any], self.worker.handle(request, local_peer()))
 
     def test_prerequisites_report_and_mandate_lifecycle(self) -> None:
         self.assertIn("live.prerequisites", READ_METHODS)

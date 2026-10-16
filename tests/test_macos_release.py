@@ -5,6 +5,7 @@ import json
 import plistlib
 import runpy
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -147,6 +148,7 @@ def test_explicit_invalid_publisher_never_falls_back(builder, tmp_path, failure)
     assert not (stage / "development-distribution").exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS release tooling relies on POSIX rename over an empty directory")
 def test_development_initialization_is_idempotent_atomic_and_preserves_existing(builder, tmp_path):
     directory = tmp_path / "local metadata"
     directory.mkdir()  # dev.sh's mkdir -p is supported.

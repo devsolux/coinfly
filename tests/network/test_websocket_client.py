@@ -1,6 +1,6 @@
 """RFC 6455 client: framing, masking rules, handshake validation, ping/pong, silence.
 
-The server side is an in-process thread on an AF_UNIX socketpair; the test never
+The server side is an in-process thread on a local socketpair; the test never
 opens an Internet socket (the suite forbids it), so ``socket.create_connection``
 is replaced for the duration of each connection.
 """
@@ -65,7 +65,7 @@ class FakeServer:
     """Minimal WebSocket server on one end of a socketpair."""
 
     def __init__(self, *, accept_correctly: bool = True, status: bytes = b"101 Switching Protocols") -> None:
-        self.server, self.client_end = socket.socketpair(socket.AF_UNIX)
+        self.server, self.client_end = socket.socketpair()  # AF_UNIX, or loopback on Windows
         self.accept_correctly = accept_correctly
         self.status = status
         self.received: list[bytes] = []

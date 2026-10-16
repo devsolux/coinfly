@@ -1,6 +1,7 @@
 """Real SQLite contention and a responsive diagnostic boundary; no operator data."""
 
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -151,6 +152,7 @@ def test_startup_timeout_keeps_diagnostics_responsive_and_discards_late_worker(t
         startup.close()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-domain socket IPC; the Windows transport uses named pipes (sockets under /tmp)")
 def test_diagnostic_ipc_remains_available_until_database_lock_is_released(tmp_path):
     # Short AF_UNIX path, with the same private directory checks as production.
     import tempfile

@@ -83,7 +83,7 @@ def test_frozen_development_uses_bundled_worker_without_checkout(packaged, tmp_p
 
     desktop = tmp_path / "coinfly.app/Contents/MacOS/coinfly"
     desktop.parent.mkdir(parents=True)
-    worker = desktop.with_name("coinfly-worker")
+    worker = desktop.with_name("coinfly-worker.exe" if sys.platform == "win32" else "coinfly-worker")
     worker.touch()
     monkeypatch.setattr(sys, "executable", str(desktop))
     assert development.checkout_root() == desktop.parent

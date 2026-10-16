@@ -1,3 +1,4 @@
+import sys
 import threading
 
 import pytest
@@ -11,7 +12,7 @@ from coinfly.ui.render_scheduler import RenderQueue
 def test_packaged_desktop_launches_sibling_worker(tmp_path, monkeypatch):
     executable = tmp_path / "coinfly.app/Contents/MacOS/coinfly"
     executable.parent.mkdir(parents=True)
-    worker = executable.with_name("coinfly-worker")
+    worker = executable.with_name("coinfly-worker.exe" if sys.platform == "win32" else "coinfly-worker")
     monkeypatch.setattr("coinfly.cli.sys.executable", str(executable))
     monkeypatch.setattr("coinfly.cli.sys.frozen", True, raising=False)
     with pytest.raises(DomainError, match="PACKAGED_WORKER_MISSING"):

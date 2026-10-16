@@ -12,7 +12,6 @@ persisted; idempotent requests; ownership/budget invariants.
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -29,7 +28,6 @@ from coinfly.control.transition_state import TransitionPhase
 from coinfly.domain.context import DomainError, EngineState, ProductTrack, RegionPolicy
 from coinfly.domain.products import ProductSubtype
 from coinfly.execution.intent_store import IntentStore
-from coinfly.ipc.auth import PeerIdentity
 from coinfly.ipc.protocol import RPCRequest
 from coinfly.market.feed import fixture_catalog
 from coinfly.market.observations import (
@@ -44,6 +42,7 @@ from coinfly.strategy.ownership import strategy_slot_id
 from coinfly.worker.automation import AutomationState
 from coinfly.worker.paths import WorkerPaths
 from coinfly.worker.supervisor import WorkerSupervisor
+from tests.support import local_peer
 
 _SENTINEL = object()
 
@@ -166,7 +165,7 @@ class AutomationFixture(TestCase):
         epoch = self.worker.coordinator.status(self.worker.authority_id).transition_epoch
         request = RPCRequest.parse({"jsonrpc": "2.0", "id": request_id or method, "method": method, "params": params or {},
                                     "epoch": epoch, "deadline_ms": int(time.time() * 1000) + 10000})
-        result = self.worker.handle(request, PeerIdentity(uid=os.getuid(), gid=os.getgid(), pid=os.getpid()))
+        result = self.worker.handle(request, local_peer())
         return cast(dict[str, Any], result)
 
     def initialize(self) -> None:

@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
-from unittest import TestCase
+from unittest import TestCase, skipIf
 
 from coinfly import __application_id__, __version__
 from coinfly.ipc.auth import OwnerOnlySandboxPolicy
@@ -25,6 +26,7 @@ from coinfly.worker.supervisor import WorkerSupervisor
 from tests.worker.test_automation_lifecycle import TestOnlyBootstrap
 
 
+@skipIf(sys.platform == "win32", "Unix-domain socket IPC; the Windows transport uses named pipes")
 class HandshakeTests(TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory(prefix="cf-hello-")

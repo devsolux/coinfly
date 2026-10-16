@@ -12,16 +12,16 @@ the desktop could not even see why. These tests pin the replacement path.
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
-from unittest import TestCase
+from unittest import TestCase, skipIf
 from unittest.mock import patch
 
 from coinfly.config.models import default_config
-from coinfly.ipc.auth import PeerIdentity
 from coinfly.ipc.local import LocalRPCClient, LocalRPCServer
 from coinfly.ipc.protocol import PROTOCOL_VERSION, RPCRequest
 from coinfly.observability import diagnostics
@@ -31,6 +31,7 @@ from coinfly.worker.ownership import AuthorityOwnership
 from coinfly.worker.paths import WorkerPaths
 from coinfly.worker.startup import WorkerStartup
 from coinfly.worker.supervisor import WorkerSupervisor
+from tests.support import local_peer
 
 from .test_automation_lifecycle import TestOnlyBootstrap
 
@@ -47,6 +48,7 @@ def hello_params(fingerprint: str | None = None) -> dict[str, Any]:
     return identity
 
 
+@skipIf(sys.platform == "win32", "Unix-domain socket IPC; the Windows transport uses named pipes (sockets under /tmp)")
 class ReplacementFixture(TestCase):
     def setUp(self) -> None:
         # Short, private path: Unix socket paths are limited to ~104 bytes on macOS.
@@ -78,7 +80,7 @@ class InitializingStartupTests(ReplacementFixture):
         startup = WorkerStartup(socket_path=self.socket, factory=slow_factory, timeout=30).start()
         self.addCleanup(startup.close)
         self.addCleanup(release.set)
-        peer = PeerIdentity(uid=os.getuid(), gid=os.getgid(), pid=os.getpid())
+        peer = local_peer()
         hello = startup.handle(request("worker.hello", hello_params()), peer)
         self.assertEqual((hello["protocol_version"], hello["build_match"], hello["initializing"]), (PROTOCOL_VERSION, True, True))
         stale = startup.handle(request("worker.hello", hello_params("0" * 64)), peer)

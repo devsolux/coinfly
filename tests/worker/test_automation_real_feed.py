@@ -13,7 +13,6 @@ thread is replaced by explicit ``sweep_once`` calls so ticks are deterministic.
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -28,13 +27,13 @@ from coinfly.control.transition_state import TransitionPhase
 from coinfly.domain.context import DomainError, ProductTrack, RegionPolicy
 from coinfly.domain.products import ProductSubtype
 from coinfly.execution.intent_store import IntentStore
-from coinfly.ipc.auth import PeerIdentity
 from coinfly.ipc.protocol import RPCRequest
 from coinfly.market.coinbase_public import CoinbasePublicRestFeed
 from coinfly.market.observations import DataSource
 from coinfly.worker.automation import AutomationConfig, AutomationState
 from coinfly.worker.paths import WorkerPaths
 from coinfly.worker.supervisor import WorkerSupervisor
+from tests.support import local_peer
 
 from .test_automation_lifecycle import TestOnlyBootstrap
 
@@ -110,7 +109,7 @@ class RealFeedFixture(TestCase):
         epoch = self.worker.coordinator.status(self.worker.authority_id).transition_epoch
         request = RPCRequest.parse({"jsonrpc": "2.0", "id": request_id or method, "method": method, "params": params or {},
                                     "epoch": epoch, "deadline_ms": int(time.time() * 1000) + 10000})
-        return cast(dict[str, Any], self.worker.handle(request, PeerIdentity(uid=os.getuid(), gid=os.getgid(), pid=os.getpid())))
+        return cast(dict[str, Any], self.worker.handle(request, local_peer()))
 
     def initialize(self, config: EngineConfig | None = None) -> None:
         config = config or default_config()

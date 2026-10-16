@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -149,7 +150,8 @@ def test_development_state_and_socket_are_isolated_and_live_is_rejected(tmp_path
     paths = WorkerPaths(root)
     assert paths.database.is_relative_to(application.storage / "development")
     assert not (tmp_path / "checkout").exists()
-    assert development_socket(tmp_path) != default_socket_path()
+    if sys.platform != "win32":  # Windows has no Unix default socket; checkouts still differ below
+        assert development_socket(tmp_path) != default_socket_path()
     assert development_socket(tmp_path) != development_socket(tmp_path / "another-checkout")
     config = default_config().model_copy(update={"environment": Environment.LIVE, "run_profile": RunProfile.STANDARD})
     with pytest.raises(DomainError, match="DEVELOPMENT_PAPER_ONLY"):

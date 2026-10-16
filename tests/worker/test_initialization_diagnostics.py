@@ -22,12 +22,12 @@ from coinfly.bootstrap.manager import BootstrapManager, BootstrapProgress, Boots
 from coinfly.bootstrap.manifest import BootstrapError
 from coinfly.config.models import default_config
 from coinfly.control.transition_state import TransitionPhase
-from coinfly.ipc.auth import PeerIdentity
 from coinfly.ipc.protocol import RPCRequest
 from coinfly.observability.diagnostics import redacted_chain, source_fingerprint
 from coinfly.ui.state import DesktopState
 from coinfly.worker.paths import WorkerPaths
 from coinfly.worker.supervisor import WorkerSupervisor
+from tests.support import local_peer
 
 _SENTINEL = object()
 
@@ -69,7 +69,7 @@ class InitializationDiagnosticsTests(TestCase):
         epoch = self.worker.coordinator.status(self.worker.authority_id).transition_epoch
         request = RPCRequest.parse({"jsonrpc": "2.0", "id": request_id or method, "method": method, "params": params or {},
                                     "epoch": epoch, "deadline_ms": int(time.time() * 1000) + 10000})
-        result = self.worker.handle(request, PeerIdentity(uid=os.getuid(), gid=os.getgid(), pid=os.getpid()))
+        result = self.worker.handle(request, local_peer())
         return cast(dict[str, Any], result)
 
     def apply(self, request_id: str) -> dict[str, Any]:
