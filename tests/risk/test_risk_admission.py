@@ -12,12 +12,16 @@ from uuid import uuid4
 from coinfly.config.models import EngineConfig, RiskLimits
 from coinfly.control.slot_service import SlotRecord, SlotService, SlotStopProof
 from coinfly.domain.context import ContextKey, DomainError, Environment, ProductTrack, RegionPolicy
-from coinfly.execution.models import OrderIntent, Side
+from coinfly.execution.dispatcher import Dispatcher
+from coinfly.execution.intent_store import IntentStore
+from coinfly.execution.models import OrderIntent, Side, Submission
+from coinfly.execution.recovery import assert_context_closed_tx
 from coinfly.risk.admission_actor import ActiveBookSnapshot, AdmissionActor, AvailableAsset, ExecutionMark
 from coinfly.risk.context_interlock import ContextInterlock
 from coinfly.risk.drain_policy import DrainPolicy
 from coinfly.risk.margin_models import MarginReductionEvidence, MarginScenario, ReductionScenario
 from coinfly.storage.writer import Writer
+from coinfly.strategy.ownership import StrategyOwnership
 
 
 class NoTradeSlotDriver:
@@ -32,6 +36,15 @@ class NoTradeSlotDriver:
 
     def reconcile(self, slot: SlotRecord) -> SlotStopProof:
         raise DomainError("TEST_NO_EVIDENCE")
+
+
+class RecordingGateway:
+    def __init__(self) -> None:
+        self.calls: list[OrderIntent] = []
+
+    def create(self, intent: OrderIntent):  # type: ignore[no-untyped-def]
+        self.calls.append(intent)
+        raise AssertionError("a refused dispatch must never reach the gateway")
 
 
 class RiskAdmissionTests(unittest.TestCase):
@@ -223,3 +236,47 @@ class RiskAdmissionTests(unittest.TestCase):
         self.assertEqual(state.daily_net_result, Decimal(-5))
         repeated = store.record(self.context, "book", equity=Decimal(95), realized_pnl=Decimal(-5), evidence_id="fill-batch", observed_at=now)
         self.assertEqual(repeated.daily_net_result, Decimal(-5))
+
+    def _insert_position(self, instrument: str, base: str, quantity: str) -> None:
+        self.writer.call(lambda connection: connection.execute(
+            "INSERT INTO ex_positions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("authority", "SANDBOX", "book", self.context.identity, instrument, base, "USD", quantity, "10", "1.5", "0.01")).rowcount)
+
+    def test_flat_position_row_without_a_mark_does_not_block_admission(self) -> None:
+        # A closed round trip leaves a zero-quantity row that is never deleted; it carries no exposure to mark.
+        self._insert_position("ETH-USD", "ETH", "0")
+        record = self.actor.admit(self.intent())
+        self.assertEqual(record.reservation_remaining, Decimal(60))
+
+    def test_open_position_without_a_mark_still_blocks_admission(self) -> None:
+        self._insert_position("ETH-USD", "ETH", "1")
+        with self.assertRaisesRegex(DomainError, "POSITION_MARK_UNVERIFIED"):
+            self.actor.admit(self.intent())
+
+    def test_stale_grant_before_dispatch_rejects_the_unsent_intent_and_frees_its_reservation(self) -> None:
+        record = self.actor.admit(self.intent())
+        # A newer book observation lands between admission and dispatch and supersedes the grant.
+        self.actor.observe(self.snapshot.model_copy(update={"evidence_id": "paper-account-2", "observed_at": datetime.now(timezone.utc)}))
+        gateway = RecordingGateway()
+        with self.assertRaisesRegex(DomainError, "RISK_GRANT_STALE"):
+            Dispatcher(self.writer, self.interlock, gateway).dispatch(record.intent.intent_id)
+        stored = IntentStore(self.writer).get(record.intent.intent_id)
+        self.assertEqual((stored.submission, stored.terminal, stored.reservation_remaining), (Submission.REJECTED, True, Decimal(0)))
+        self.assertEqual(gateway.calls, [])
+        self.writer.call(lambda connection: assert_context_closed_tx(connection, self.context))
+        # The released collateral is spendable again by a fresh admission.
+        self.assertEqual(self.actor.admit(self.intent(revision=2)).reservation_remaining, Decimal(60))
+
+    def test_final_send_revalidation_uses_the_admission_fee_buffer(self) -> None:
+        # A spot buy that spends the strategy's whole approved cash is admitted with a zero fee buffer,
+        # and the final-send re-check must apply that same buffer rather than a hard-coded 1 %.
+        StrategyOwnership(self.writer, self.slots)
+        now = datetime.now(timezone.utc).isoformat()
+        self.writer.call(lambda connection: (
+            connection.execute("INSERT INTO cf_strategy_budgets VALUES(?,?,?,?)", (self.context.identity, "strategy@1", "100", now)),
+            connection.execute(
+                "INSERT INTO cf_strategy_slots (slot_id,context_id,strategy_identity,instrument,allocated_budget,state,selection_reason,"
+                "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                ("slot", self.context.identity, "strategy@1", "BTC-USD", "100", "ACTIVE", "test", now, now))))
+        record = self.actor.admit(self.intent(quantity="10"))
+        self.interlock.validate(record.intent)

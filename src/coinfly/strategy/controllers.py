@@ -82,13 +82,13 @@ class FixtureSequenceController:
 
     profile = ControllerProfile.FIXTURE_SEQUENCE_V1
 
-    def __init__(self, sides: Sequence[Side], *, environment: Environment, repeat_last: bool = True) -> None:
+    def __init__(self, sides: Sequence[Side], *, environment: Environment, hold_when_exhausted: bool = True) -> None:
         if environment is not Environment.SANDBOX:
             raise DomainError("FIXTURE_CONTROLLER_SANDBOX_ONLY")
         if not sides or any(side not in ("BUY", "SELL", "HOLD") for side in sides):
             raise ValueError("scripted sides required")
         self._sides = tuple(sides)
-        self._repeat_last = repeat_last
+        self._hold_when_exhausted = hold_when_exhausted
         self._cursor = 0
         self.observed: list[Decision] = []
 
@@ -119,7 +119,7 @@ class FixtureSequenceController:
             raise DomainError("REWARD_NOT_APPLICABLE")
         if self._cursor < len(self._sides):
             side = self._sides[self._cursor]
-        elif self._repeat_last:
+        elif self._hold_when_exhausted:
             side = "HOLD"
         else:
             raise DomainError("FIXTURE_SEQUENCE_EXHAUSTED")

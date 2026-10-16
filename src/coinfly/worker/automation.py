@@ -39,7 +39,7 @@ from decimal import Decimal, localcontext
 from enum import StrEnum
 from hashlib import sha256
 from typing import Any
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field, model_validator
 
@@ -1668,7 +1668,3 @@ class _FeedTransport:
 
     def retire(self) -> None:
         self._feed.stop()
-
-
-def new_request_id() -> str:
-    return uuid4().hex

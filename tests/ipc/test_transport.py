@@ -121,9 +121,13 @@ class UnixRoundTripTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
             with UnixRPCClient(self.path) as client:
                 self.assertEqual(client.call("state.snapshot", epoch=3), {"sequence": 12, "context_epoch": 3})
-                with self.assertRaisesRegex(RPCError, "INTERNAL_ERROR") as error:
-                    client.call("context.preview", epoch=3)
+                with self.assertLogs("coinfly.ipc.transport_unix", "ERROR") as logged:
+                    with self.assertRaisesRegex(RPCError, "INTERNAL_ERROR") as error:
+                        client.call("context.preview", epoch=3)
                 self.assertNotIn("secret-canary", str(error.exception))
+                # The defect is traceable (method and type) without logging the message.
+                self.assertIn("method=context.preview error=RuntimeError", "\n".join(logged.output))
+                self.assertNotIn("secret-canary", "\n".join(logged.output))
             self.assertEqual(peers[0].uid, os.getuid())
             with UnixRPCClient(self.path) as client:
                 with self.assertRaisesRegex(RPCError, "SIGNED_HELPER_REQUIRED"):

@@ -126,7 +126,6 @@ class LiveSpotEngine:
         self._retired = False
         self._initialized = False
         self._enabled_slots: set[str] = set()
-        self._exit_children = 0
         self.writer.call(ensure_intent_causes_schema)
 
     # ------------------------------------------------------------------ lifecycle
@@ -283,15 +282,12 @@ class LiveSpotEngine:
             "SELECT MIN(i.created_at) FROM ex_intents i JOIN ex_outbox o USING(intent_id) "
             "WHERE i.context_id=? AND o.terminal=0", (self.context.identity,)).fetchone()[0])
         since = min(now - lookback, datetime.fromisoformat(oldest) - timedelta(minutes=1)) if oldest else now - lookback
-        known_ids = self.writer.call(lambda connection: {str(row[0]) for row in connection.execute(
-            "SELECT intent_id FROM ex_intents WHERE authority_id=? AND environment='LIVE' AND scope_id=?",
-            (self.context.authority_id, self.scope))})
         all_open, complete, _ = gateway.list_open_orders()
         if not complete:
             raise DomainError("ORDER_HISTORY_INCOMPLETE")
-        external_activity = any(item.get("client_order_id") not in known_ids for item in all_open)
         report["order_scope"] = "CREDENTIAL_PORTFOLIO_RETAIL_ADVANCED"
-        report["external_open_orders"] = sum(item.get("client_order_id") not in known_ids for item in all_open)
+        open_client_ids = [item.get("client_order_id") for item in all_open]
+        history_open_client_ids: list[Any] = []
         open_before = self._open_intent_ids()
         retained_instruments = self.writer.call(lambda connection: {str(row[0]) for row in connection.execute(
             "SELECT DISTINCT json_extract(payload_json,'$.instrument') FROM ex_intents WHERE context_id=?", (self.context.identity,))})
@@ -299,14 +295,21 @@ class LiveSpotEngine:
             orders, complete, _ = gateway.list_orders(product_id=instrument, since=since)
             if not complete:
                 raise DomainError("ORDER_HISTORY_INCOMPLETE")
-            external_activity = external_activity or any(str(item.get("status")) in OPEN_ORDER_STATUSES
-                and item.get("client_order_id") not in known_ids for item in orders)
+            history_open_client_ids.extend(item.get("client_order_id") for item in orders if str(item.get("status")) in OPEN_ORDER_STATUSES)
             by_client = {str(item.get("client_order_id")): item for item in orders if isinstance(item.get("client_order_id"), str)}
             fills = gateway.ingest_fills(product_id=instrument, since=since)
             report["fills_applied"] += sum(1 for item in fills if item.applied)
             report["fills_refused"] += sum(1 for item in fills if not item.applied and item.incident)
             self._apply_order_states(by_client)
             report["instruments"].append({"instrument": instrument, "history_complete": complete, "orders": len(orders), "fills": len(fills)})
+        # Ownership is judged after the venue walks: an intent is persisted before it is sent, so any
+        # order of ours the walks saw is already in the ledger. Reading the ids first would flag an
+        # order submitted mid-walk as external. Genuinely unknown client ids still fail closed.
+        known_ids = self.writer.call(lambda connection: {str(row[0]) for row in connection.execute(
+            "SELECT intent_id FROM ex_intents WHERE authority_id=? AND environment='LIVE' AND scope_id=?",
+            (self.context.authority_id, self.scope))})
+        report["external_open_orders"] = sum(client_id not in known_ids for client_id in open_client_ids)
+        external_activity = report["external_open_orders"] > 0 or any(client_id not in known_ids for client_id in history_open_client_ids)
         # Intents that became terminal during this sync, whether the fill facts
         # completed them or the venue's documented terminal status did.
         report["orders_terminal"] = len(open_before - self._open_intent_ids())
@@ -573,12 +576,11 @@ class LiveSpotEngine:
             quantity = (quantity / contract.quantity_increment).to_integral_value(rounding=ROUND_DOWN) * contract.quantity_increment
             if quantity <= 0 or quantity * price < contract.minimum_notional:
                 raise DomainError("DRAIN_DUST_OR_LIQUIDITY_BLOCKED")
-            self._exit_children += 1
             intent = OrderIntent(context=self.context, scope_id=self.scope, profile_version=1, signer_version=1,
                                  slot_id=self._slot_for(instrument), allocation_revision=0, instrument=instrument,
                                  base_asset=contract.base_currency, quote_asset=contract.quote_currency, side=Side.SELL,
                                  kind=IntentKind.EXIT, quantity=quantity, limit_price=price, contract_multiplier=Decimal(1),
-                                 child_index=self._exit_children)
+                                 child_index=self._next_exit_child())
             self.observe_execution_book()  # the sync above changed the facts; admission needs the current book
             record = self.admission.admit(intent)
             self.writer.call(lambda connection: record_cause_tx(connection, intent_id=record.intent.intent_id, context_id=self.context.identity,
@@ -589,6 +591,17 @@ class LiveSpotEngine:
             if not remaining.terminal:
                 raise DomainError("DRAIN_AWAITING_LIQUIDITY")
         raise DomainError("DRAIN_OPERATION_BUDGET_EXCEEDED")
+
+    def _next_exit_child(self) -> int:
+        """Continue after the highest persisted EXIT index so a restarted engine never reuses a semantic key.
+
+        The key spans context epochs and ``ex_intents.semantic_key`` is unique, so the index
+        comes from the ledger (like the paper engine), never from process memory.
+        """
+        return int(self.writer.call(lambda connection: connection.execute(
+            "SELECT COALESCE(MAX(json_extract(payload_json,'$.child_index')),0)+1 FROM ex_intents "
+            "WHERE authority_id=? AND environment='LIVE' AND scope_id=? AND json_extract(payload_json,'$.kind')=?",
+            (self.context.authority_id, self.scope, IntentKind.EXIT.value)).fetchone()[0]))
 
     def _certificate(self, slot: SlotRecord | None) -> StopCertificate:
         now = self._clock()

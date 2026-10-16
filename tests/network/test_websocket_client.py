@@ -137,6 +137,26 @@ class ClientTests(TestCase):
         with self.assertRaisesRegex(DomainError, "WEBSOCKET_HANDSHAKE_REJECTED"):
             self.connect(FakeServer(status=b"403 Forbidden"))
 
+    def test_failed_handshake_closes_the_tls_wrapped_socket(self) -> None:
+        class DetachingContext:
+            """Like SSLContext.wrap_socket: the wrapper takes the descriptor and the raw socket is left detached."""
+
+            wrapped: socket.socket | None = None
+
+            def wrap_socket(self, raw: socket.socket, *, server_hostname: str) -> socket.socket:
+                self.wrapped = socket.socket(fileno=raw.detach())
+                return self.wrapped
+
+        server = FakeServer(accept_correctly=False)
+        self.addCleanup(server.close)
+        context = DetachingContext()
+        client = WebSocketClient("wss://example.invalid/ws", tls_context=context)  # type: ignore[arg-type]
+        with mock.patch("coinfly.network.websocket_client.socket.create_connection", return_value=server.client_end), \
+                self.assertRaisesRegex(DomainError, "WEBSOCKET_HANDSHAKE_FAILED"):
+            client.connect()
+        assert context.wrapped is not None
+        self.assertEqual(context.wrapped.fileno(), -1)  # closed, not left for the garbage collector
+
     def test_url_validation(self) -> None:
         for bad in ("http://example.invalid", "wss://user:pw@example.invalid", "wss:///nohost"):
             with self.assertRaisesRegex(DomainError, "WEBSOCKET_URL_INVALID"):

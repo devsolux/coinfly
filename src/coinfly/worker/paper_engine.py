@@ -26,9 +26,10 @@ from coinfly.domain.context import ContextKey, DomainError, Environment, Product
 from coinfly.domain.decimal_math import exact_decimal
 from coinfly.domain.products import ProductSubtype
 from coinfly.execution.dispatcher import CreateOutcome, CreateResult, Dispatcher
-from coinfly.execution.evidence import fence_authority_tx
+from coinfly.execution.evidence import event_tx, fence_authority_tx
 from coinfly.execution.fact_reducer import (
     FactReducer,
+    FillResult,
     acknowledge_tx,
     apply_fill_tx,
     reject_tx,
@@ -36,8 +37,8 @@ from coinfly.execution.fact_reducer import (
 )
 from coinfly.execution.intent_causes import ensure_schema as ensure_intent_causes_schema
 from coinfly.execution.intent_causes import record_cause_tx
-from coinfly.execution.intent_store import get_tx
-from coinfly.execution.models import Fill, IntentKind, OrderIntent, Side
+from coinfly.execution.intent_store import get_tx, prepare_tx
+from coinfly.execution.models import Fill, IntentKind, OrderIntent, Reservation, Side, Submission
 from coinfly.execution.recovery import (
     assert_context_closed_tx,
     assert_slot_closed_tx,
@@ -77,6 +78,8 @@ PAPER_FUNDING_INTERVALS: dict[ProductSubtype, timedelta] = {
     ProductSubtype.PERPETUAL_STYLE_FUTURE: timedelta(hours=1),
 }
 PAPER_FUNDING_RATE_PER_INTERVAL = Decimal("0.0001")
+# Identity prefix of the synthetic expiry-settlement events (and of their ledger carrier intents).
+PAPER_EXPIRY_PREFIX = "paper-expiry:"
 
 
 def _interval_start(now: datetime, interval: timedelta) -> datetime:
@@ -256,6 +259,8 @@ class LocalPaperEngine:
                         acknowledge_tx(connection, identifier, self._order_id(order.order_id), f"paper-recovery-{identifier}")
                         if order.terminal:
                             terminal_tx(connection, identifier, f"paper-recovery-terminal-{identifier}", complete_fills=True)
+                    elif identifier.startswith(self._order_id(PAPER_EXPIRY_PREFIX)):
+                        continue  # a ledger-only expiry close, terminal when written: the matcher never held an order for it
                     elif record["submission"] == "PENDING_SUBMISSION":
                         # Matcher state + accounting share one local transaction.
                         # Its complete client-ID inventory is authoritative here.
@@ -399,22 +404,55 @@ class LocalPaperEngine:
         if result.incident_code is not None:
             incidents.append(result.incident_code)
 
+    def _venue_now(self, stamp: datetime | None = None) -> datetime:
+        """The paper venue's one monotonic clock.
+
+        Wall time (or a feed stamp) is never allowed to run behind the matcher's
+        latest event: feed stamps and the engine's own operations share one clock,
+        and an observation stamp stays on the observation as data.
+        """
+        candidate = datetime.now(timezone.utc) if stamp is None else stamp
+        if candidate.tzinfo is None or candidate.utcoffset() is None:
+            raise DomainError("AWARE_TIMESTAMP_REQUIRED")
+        last = self.matcher.last_time
+        return last if last is not None and candidate < last else candidate
+
+    def _no_creation(self, intent: OrderIntent, code: str) -> Future[CreateResult]:
+        """A refusal before any order or durable side effect exists: proven non-creation, not UNKNOWN."""
+        output: Future[CreateResult] = Future()
+        output.set_result(CreateResult(context=self.context, outcome=CreateOutcome.REJECTED_NO_CREATION,
+                                       evidence_id=f"paper-reject-{code}-{intent.intent_id}"))
+        return output
+
     def create(self, intent: OrderIntent) -> Future[CreateResult]:
-        """Called only by Dispatcher under the final-send interlock."""
+        """Called only by Dispatcher under the final-send interlock.
+
+        Deterministic paper refusals (engine fenced, matcher validation) happen before
+        any order or durable write exists and return ``REJECTED_NO_CREATION``. Anything
+        that fails once persistence has begun raises, so the dispatcher records UNKNOWN.
+        """
         output: Future[CreateResult] = Future()
         self.interlock.validate(intent)
         with self._lock:
             if self._retired or intent.context != self.context or intent.scope_id != self.scope:
                 raise DomainError("PAPER_CONTEXT_MISMATCH")
             if intent.kind == IntentKind.ENTRY and (not self._armed or self._quiesced):
-                raise DomainError("PAPER_ENTRIES_FENCED")
+                return self._no_creation(intent, "PAPER_ENTRIES_FENCED")
             previous = self.matcher.dump_state()
             try:
-                order = self.matcher.submit(PaperOrderRequest(
-                    client_order_id=intent.intent_id, instrument_id=intent.instrument,
-                    side=PaperSide(intent.side.value), quantity=intent.quantity,
-                    limit_price=intent.limit_price, reduce_only=intent.kind != IntentKind.ENTRY),
-                    now=datetime.now(timezone.utc))
+                try:
+                    order = self.matcher.submit(PaperOrderRequest(
+                        client_order_id=intent.intent_id, instrument_id=intent.instrument,
+                        side=PaperSide(intent.side.value), quantity=intent.quantity,
+                        limit_price=intent.limit_price, reduce_only=intent.kind != IntentKind.ENTRY),
+                        now=self._venue_now())
+                except DomainError as error:
+                    # The matcher validates before it changes anything, so no order
+                    # exists. A client-ID conflict means the ledger and matcher
+                    # disagree about an existing order: that stays an exception.
+                    if error.code == "PAPER_CLIENT_ID_CONFLICT":
+                        raise
+                    return self._no_creation(intent, error.code)
                 order_id = self._order_id(order.order_id)
                 def save(connection: sqlite3.Connection) -> None:
                     self._persist_tx(connection)
@@ -430,14 +468,28 @@ class LocalPaperEngine:
 
     def update_market(self, instrument: str, *, bids: tuple[DepthLevel, ...],
                       asks: tuple[DepthLevel, ...], now: datetime) -> tuple[PaperFill, ...]:
-        """Trusted market ingestion, never a GUI financial command."""
+        """Trusted market ingestion, never a GUI financial command.
+
+        ``now`` is when the depth was observed. It stays on the observation as data;
+        the venue's event clock never runs behind its own latest event, so a snapshot
+        observed before that event (received while a tick was computing, polled on
+        the next) is still applied, with its true age. A snapshot older than the book
+        already held for the instrument is dropped, never allowed to replace it.
+        """
         with self.interlock.lock, self._lock:
             if self._retired:
                 raise DomainError("PAPER_CONTEXT_RETIRED")
+            clock = self._venue_now(now)
+            # Unacceptable input is refused before anything is touched; it is not an
+            # accounting failure and must not fence the authority.
+            self.matcher.validate_book(instrument, bids=bids, asks=asks, now=clock, observed_at=now)
+            held = self._depth.get(instrument)
+            if held is not None and now < held[2]:
+                return ()
             previous = self.matcher.dump_state()
             old_depth = dict(self._depth)
             try:
-                fills = self.matcher.update_book(instrument, bids=bids, asks=asks, now=now)
+                fills = self.matcher.update_book(instrument, bids=bids, asks=asks, now=clock, observed_at=now)
                 self._depth[instrument] = (bids, asks, now)
                 incidents: list[str] = []
                 def commit(connection: sqlite3.Connection) -> None:
@@ -472,7 +524,6 @@ class LocalPaperEngine:
                 self._depth = old_depth
                 self.interlock.provisional_fence(self.context.authority_id, "PAPER_ACCOUNTING_FAILURE")
                 raise
-            self._depth[instrument] = (bids, asks, now)
         self._notify()
         return fills
 
@@ -550,8 +601,14 @@ class LocalPaperEngine:
         (``PAPER_FUNDING_RATE_PER_INTERVAL``, long pays when positive) against the
         last mark, once per interval (idempotent by event id), journaled as
         ``PAPER_FUNDING``. A ``DATED_FUTURE`` position is cash-settled at its
-        catalog expiry (``PAPER_EXPIRY_SETTLEMENT``): the position is closed at
-        the mark. Every event is labeled synthetic; none is venue evidence.
+        catalog expiry (``PAPER_EXPIRY_SETTLEMENT``): the margin position and the
+        execution ledger are both closed at the mark by one synthetic, fee-free
+        fill, so lots, positions, journal and risk books agree. Every event is
+        labeled synthetic; none is venue evidence.
+
+        All of it commits together with the matcher snapshot. If that commit fails
+        the in-memory book, the settled-event ids and the settlement cursor are
+        rolled back, so the next call retries the same due events.
         """
         with self.interlock.lock, self._lock:
             if self._retired or self.matcher.margin is None:
@@ -562,51 +619,120 @@ class LocalPaperEngine:
             self._settlement_cursor = now
             if previous is None or now <= previous:
                 return ()  # no retroactive funding: boundaries are charged when the clock crosses them
-            for position in margin.positions:
-                instrument = position.instrument_id
-                contract = next((item for item in self._instruments if item.instrument_id == instrument), None)
-                depth = self._depth.get(instrument)
-                if contract is None or depth is None or not depth[0] or not depth[1]:
-                    continue
-                mark = (depth[0][0].price + depth[1][0].price) / 2
-                subtype = contract.declared_subtype
-                interval = PAPER_FUNDING_INTERVALS.get(subtype)
-                if interval is not None:
-                    boundary = _interval_start(now, interval)
-                    while boundary > previous:
-                        stamp = boundary.strftime("%Y%m%dT%H%M%SZ")
-                        event_id = f"paper-funding:{instrument}:{stamp}"
+            snapshot: dict[str, object] | None = None  # matcher state before the first mutation
+            added: list[str] = []
+            try:
+                for position in margin.positions:
+                    instrument = position.instrument_id
+                    contract = next((item for item in self._instruments if item.instrument_id == instrument), None)
+                    depth = self._depth.get(instrument)
+                    if contract is None or depth is None or not depth[0] or not depth[1]:
+                        continue
+                    mark = (depth[0][0].price + depth[1][0].price) / 2
+                    subtype = contract.declared_subtype
+                    interval = PAPER_FUNDING_INTERVALS.get(subtype)
+                    if interval is not None:
+                        boundary = _interval_start(now, interval)
+                        while boundary > previous:
+                            stamp = boundary.strftime("%Y%m%dT%H%M%SZ")
+                            event_id = f"paper-funding:{instrument}:{stamp}"
+                            if event_id not in self._settled_events:
+                                if snapshot is None:
+                                    snapshot = self.matcher.dump_state()
+                                payment = -(PAPER_FUNDING_RATE_PER_INTERVAL * position.quantity * mark * contract.contract_multiplier)
+                                applied = margin.apply_funding(event_id, instrument, payment)
+                                self._settled_events.add(event_id)
+                                added.append(event_id)
+                                if applied:
+                                    events.append({"kind": "PAPER_FUNDING", "event_id": event_id, "instrument": instrument, "payment": str(payment),
+                                                   "rate": str(PAPER_FUNDING_RATE_PER_INTERVAL), "synthetic": True,
+                                                   "interval_start": boundary.isoformat()})
+                            boundary -= interval
+                    expiry = getattr(contract, "expiry", None)
+                    if subtype is ProductSubtype.DATED_FUTURE and expiry is not None and now >= expiry:
+                        event_id = f"{PAPER_EXPIRY_PREFIX}{instrument}:{expiry.strftime('%Y%m%dT%H%M%SZ')}"
                         if event_id not in self._settled_events:
-                            payment = -(PAPER_FUNDING_RATE_PER_INTERVAL * position.quantity * mark * contract.contract_multiplier)
-                            applied = margin.apply_funding(event_id, instrument, payment)
+                            if snapshot is None:
+                                snapshot = self.matcher.dump_state()
+                            realized = margin.apply_fill(instrument, -position.quantity, mark, multiplier=contract.contract_multiplier,
+                                                         fee=Decimal(0), reduce_only=True)
                             self._settled_events.add(event_id)
-                            if applied:
-                                events.append({"kind": "PAPER_FUNDING", "event_id": event_id, "instrument": instrument, "payment": str(payment),
-                                               "rate": str(PAPER_FUNDING_RATE_PER_INTERVAL), "synthetic": True,
-                                               "interval_start": boundary.isoformat()})
-                        boundary -= interval
-                expiry = getattr(contract, "expiry", None)
-                if subtype is ProductSubtype.DATED_FUTURE and expiry is not None and now >= expiry:
-                    event_id = f"paper-expiry:{instrument}:{expiry.strftime('%Y%m%dT%H%M%SZ')}"
-                    if event_id not in self._settled_events:
-                        realized = margin.apply_fill(instrument, -position.quantity, mark, multiplier=contract.contract_multiplier,
-                                                     fee=Decimal(0), reduce_only=True)
-                        self._settled_events.add(event_id)
-                        events.append({"kind": "PAPER_EXPIRY_SETTLEMENT", "event_id": event_id, "instrument": instrument,
-                                       "quantity": str(position.quantity), "mark": str(mark), "realized": str(realized), "synthetic": True})
+                            added.append(event_id)
+                            events.append({"kind": "PAPER_EXPIRY_SETTLEMENT", "event_id": event_id, "instrument": instrument,
+                                           "quantity": str(position.quantity), "mark": str(mark), "realized": str(realized), "synthetic": True})
+                incidents: list[str] = []
+                if events:
+                    def save(connection: sqlite3.Connection) -> None:
+                        applied_fills: list[tuple[str, Decimal]] = []
+                        for event in events:
+                            if event["kind"] == "PAPER_EXPIRY_SETTLEMENT":
+                                result = self._settle_expiry_tx(connection, event)
+                                if result.applied:
+                                    applied_fills.append((result.fill_id, Decimal(0)))
+                                if result.incident:
+                                    incidents.append(result.incident)
+                                continue
+                            amount = Decimal(event["payment"])
+                            if amount != 0:
+                                post_tx(connection, JournalFrame(context=self.context, scope_id=self.scope, event_kind=event["kind"],
+                                        evidence_id=event["event_id"],
+                                        entries=(JournalEntry(account="assets:collateral", asset=self.config.reporting_currency, amount=amount),
+                                                 JournalEntry(account="pnl:synthetic_settlement", asset=self.config.reporting_currency, amount=-amount))))
+                        self._book_fill_risk_tx(connection, applied_fills)
+                        self._persist_tx(connection)
+                    self.writer.call(save)
+            except BaseException:
+                if snapshot is not None:
+                    self._matcher = PaperMatcher.restore(self.context, self._instruments, snapshot)
+                self._settled_events.difference_update(added)
+                self._settlement_cursor = previous
+                raise
+            for incident in incidents:
+                self.interlock.provisional_fence(self.context.authority_id, incident)
             if events:
-                def save(connection: sqlite3.Connection) -> None:
-                    for event in events:
-                        amount = Decimal(event.get("payment") or event.get("realized") or "0")
-                        if amount != 0:
-                            post_tx(connection, JournalFrame(context=self.context, scope_id=self.scope, event_kind=event["kind"],
-                                    evidence_id=event["event_id"],
-                                    entries=(JournalEntry(account="assets:collateral", asset=self.config.reporting_currency, amount=amount),
-                                             JournalEntry(account="pnl:synthetic_settlement", asset=self.config.reporting_currency, amount=-amount))))
-                    self._persist_tx(connection)
-                self.writer.call(save)
                 self._notify()
             return tuple(events)
+
+    @exact_decimal
+    def _settle_expiry_tx(self, connection: sqlite3.Connection, event: dict[str, Any]) -> FillResult:
+        """Close an expired dated future in the execution ledger: one synthetic, fee-free fill at the mark.
+
+        The ledger never holds an unattributed fill (it would be suspense and would
+        block every stop proof), so the close is carried by a synthetic EXIT intent
+        on the slot that traded the instrument. That intent is written terminal and
+        fully filled in this transaction; it is never admitted, dispatched or sent,
+        and no risk guard chooses it. It exists only so lots, positions, strategy
+        capital, journal and drawdown see the same cash settlement as any paper fill.
+        """
+        instrument = str(event["instrument"])
+        contract = self.instrument_contract(instrument)
+        held, mark = Decimal(event["quantity"]), Decimal(event["mark"])
+        owner = connection.execute(
+            "SELECT slot_id FROM ex_intents WHERE context_id=? AND json_extract(payload_json,'$.instrument')=? "
+            "ORDER BY rowid DESC LIMIT 1", (self.context.identity, instrument)).fetchone()
+        if owner is None:
+            raise DomainError("POSITION_SLOT_UNATTRIBUTED")
+        children = int(connection.execute("SELECT COUNT(*) FROM ex_intents WHERE context_id=?",
+                                          (self.context.identity,)).fetchone()[0])
+        reference = self._order_id(str(event["event_id"]))
+        side = Side.SELL if held > 0 else Side.BUY
+        quantity = abs(held)
+        intent = OrderIntent(intent_id=reference, context=self.context, scope_id=self.scope, profile_version=1,
+            signer_version=0, slot_id=owner["slot_id"], allocation_revision=0, instrument=instrument,
+            base_asset=contract.base_currency, quote_asset=contract.quote_currency, side=side, kind=IntentKind.EXIT,
+            quantity=quantity, limit_price=mark, contract_multiplier=contract.contract_multiplier, child_index=children)
+        prepare_tx(connection, intent, Reservation(asset=contract.quote_currency,
+                                                    amount=quantity * mark * contract.contract_multiplier))
+        acknowledge_tx(connection, reference, f"{reference}:order", f"{reference}:accept")
+        result = apply_fill_tx(connection, Fill(context=self.context, scope_id=self.scope, venue_id="coinfly-paper",
+            account_id=self.scope, instrument=instrument, trade_id=f"{reference}:trade", venue_order_id=f"{reference}:order",
+            evidence_id=f"{reference}:fill", intent_id=reference, base_asset=contract.base_currency,
+            quote_asset=contract.quote_currency, side=side, quantity=quantity, price=mark, fee=Decimal(0),
+            fee_asset=contract.quote_currency, contract_multiplier=contract.contract_multiplier))
+        event_tx(connection, self.context, self.scope, "PAPER_EXPIRY_SETTLEMENT", reference, f"{reference}:fill")
+        record_cause_tx(connection, intent_id=reference, context_id=self.context.identity, cause="VENUE_SETTLEMENT",
+                        origin="paper-dated-future-expiry")
+        return result
 
     def instrument_contract(self, instrument_id: str) -> PaperInstrument:
         for item in self._instruments:
@@ -652,7 +778,7 @@ class LocalPaperEngine:
                 order = self.matcher.order(order_id)
                 if order.terminal:
                     continue
-                self.matcher.cancel(order.order_id, now=datetime.now(timezone.utc))
+                self.matcher.cancel(order.order_id, now=self._venue_now())
                 cancelled.append(order.client_order_id)
             try:
                 incidents: list[str] = []
@@ -732,11 +858,18 @@ class LocalPaperEngine:
             self.writer.call(lambda connection: record_cause_tx(
                 connection, intent_id=record.intent.intent_id, context_id=self.context.identity, cause="PROTECTIVE_DRAIN",
                 origin="SLOT_DRAIN" if slot is not None else "CONTEXT_DRAIN"))
-            Dispatcher(self.writer, self.interlock, self, reducer=self.reducer).dispatch(record.intent.intent_id).result(timeout=5)
+            dispatched = Dispatcher(self.writer, self.interlock, self, reducer=self.reducer).dispatch(
+                record.intent.intent_id).result(timeout=5)
+            if dispatched.submission is Submission.REJECTED:
+                # A proven non-creation makes no progress and consumes no displayed liquidity;
+                # planning the same exit again cannot succeed.
+                raise DomainError("DRAIN_ORDER_REJECTED")
             with self._lock:
                 self._drain_used[instrument] = (stamp, (used if used_stamp == stamp else Decimal(0)) + quantity)
             self._advance_pending()
             remaining = self.writer.call(lambda connection: get_tx(connection, record.intent.intent_id))
+            if remaining.submission is Submission.REJECTED:
+                raise DomainError("DRAIN_ORDER_REJECTED")
             if not remaining.terminal:
                 raise DomainError("DRAIN_AWAITING_LIQUIDITY")
         raise DomainError("DRAIN_OPERATION_BUDGET_EXCEEDED")
@@ -875,7 +1008,7 @@ class LocalPaperEngine:
     def _advance_pending(self) -> None:
         with self.interlock.lock, self._lock:
             before = self.matcher.dump_state()
-            fills = self.matcher.advance(now=datetime.now(timezone.utc))
+            fills = self.matcher.advance(now=self._venue_now())
             try:
                 incidents: list[str] = []
                 def commit(connection: sqlite3.Connection) -> None:
@@ -1011,8 +1144,8 @@ class LocalPaperEngine:
                                 "seeded": True},
                     # What the paper venue does and does not model, stated once.
                     "fill_model": {"kind": "LIMIT_CROSSES_DISPLAYED_DEPTH", "partial_fills": True, "liquidity_consumed_per_snapshot": True,
-                                   "queue_position": "NOT_MODELED", "latency_microseconds": int(matcher.latency.total_seconds() * 1_000_000)
-                                   if hasattr(matcher, "latency") else 0,
+                                   "queue_position": "NOT_MODELED",
+                                   "latency_microseconds": matcher.latency // timedelta(microseconds=1),
                                    "synthetic_funding_rate_per_interval": str(PAPER_FUNDING_RATE_PER_INTERVAL),
                                    "funding_intervals": {key.value: int(value.total_seconds()) for key, value in PAPER_FUNDING_INTERVALS.items()},
                                    "expiry_settlement": "CASH_AT_MARK"}}

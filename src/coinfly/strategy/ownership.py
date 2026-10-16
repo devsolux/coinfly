@@ -10,9 +10,8 @@ never spend the same budget independently.
 
 from __future__ import annotations
 
-import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal, localcontext
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -267,6 +266,11 @@ class StrategyOwnership:
     def _reserve_budget(self, context: ContextKey, definition: StrategyDefinition, instrument: str, slot_id: str,
                         per_slot_cap: Decimal, reason: SelectionReason | None, now: datetime) -> Decimal | None:
         def reserve(connection: sqlite3.Connection) -> Decimal | None:
+            existing = connection.execute("SELECT state,allocated_budget FROM cf_strategy_slots WHERE slot_id=?", (slot_id,)).fetchone()
+            if existing is not None and existing[0] != "RETIRED":
+                # Resuming an interrupted creation: this row's allocation is already counted in the
+                # ledger, so the slot cap and remaining budget must not be applied to it a second time.
+                return Decimal(existing[1])
             ledger = self._budget_tx(connection, context, definition)
             if ledger.approved_capital <= 0:
                 return None
@@ -276,12 +280,10 @@ class StrategyOwnership:
                 return None
             if ledger.slots >= definition.max_active_slots:
                 return None
-            existing = connection.execute("SELECT state FROM cf_strategy_slots WHERE slot_id=?", (slot_id,)).fetchone()
             if existing is not None:
-                if existing[0] == "RETIRED":
-                    connection.execute("UPDATE cf_strategy_slots SET state='PENDING_START',allocated_budget=?,updated_at=?,retire_operation_id=NULL,"
-                                       "retired_at=NULL,absent_count=0 WHERE slot_id=?",
-                                       (str(allocation), now.isoformat(), slot_id))
+                connection.execute("UPDATE cf_strategy_slots SET state='PENDING_START',allocated_budget=?,updated_at=?,retire_operation_id=NULL,"
+                                   "retired_at=NULL,absent_count=0 WHERE slot_id=?",
+                                   (str(allocation), now.isoformat(), slot_id))
                 return allocation
             # Named columns bind the fresh-install schema explicitly; a
             # positional INSERT would break on every new column.
@@ -316,14 +318,6 @@ class StrategyOwnership:
 
     def describe(self, context: ContextKey, definition: StrategyDefinition | None) -> list[dict[str, Any]]:
         return [dict(slot.model_dump(mode="json")) for slot in self.owned(context, definition)]
-
-
-def owned_slot_json(slot: OwnedSlot) -> str:
-    return json.dumps(slot.model_dump(mode="json"), sort_keys=True)
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 __all__ = ["BudgetLedger", "OwnedSlot", "SlotReconciliation", "StrategyOwnership", "strategy_slot_id", "SlotRecord"]

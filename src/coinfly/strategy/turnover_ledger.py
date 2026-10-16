@@ -159,7 +159,10 @@ class TurnoverLedger:
         with localcontext(financial_context(512)):
             proposed = quantity * price * multiplier
             allowance = capital * self.fraction - spent - reserved
-        if turnover_admissible(capital, spent + reserved, proposed):
+            within_fraction = proposed < allowance
+        # The research guard validates the inputs and enforces the 5 % ceiling; the configured fraction
+        # (never above that ceiling) is checked exactly and strictly against the same allowance.
+        if turnover_admissible(capital, spent + reserved, proposed) and within_fraction:
             return TurnoverDecision(True, "TURNOVER_ADMITTED", capital, spent, reserved, proposed, allowance, start, end)
         if policy == "REJECT":
             return TurnoverDecision(False, "TURNOVER_LIMIT_EXCEEDED", capital, spent, reserved, proposed, allowance, start, end)

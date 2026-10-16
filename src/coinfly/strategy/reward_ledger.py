@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal, localcontext
 from typing import Any
 
@@ -271,7 +271,3 @@ class RewardLedger:
                 credits.sort(key=lambda credit: credit.decision_at)
                 return credits, truncated
         return self.writer.call(read)
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)

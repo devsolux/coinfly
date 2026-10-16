@@ -226,7 +226,12 @@ def record_observation_line(observation: MarketObservation) -> str:
 
 
 class ReplayFeed:
-    """Replays a recording strictly in order; observation times drive availability."""
+    """Replays a recording strictly in order; observation times drive availability.
+
+    A recording must be chronological and each instrument's sequence must
+    strictly increase; otherwise it is refused at load rather than replayed
+    with records silently dropped.
+    """
 
     source = DataSource.REPLAY_FILE
 
@@ -253,6 +258,15 @@ class ReplayFeed:
         if any(later.observed_at < earlier.observed_at
                for earlier, later in zip(self._observations, self._observations[1:])):
             raise DomainError("REPLAY_NOT_CHRONOLOGICAL")
+        # The store ignores a sequence that does not advance, so a restart (or a
+        # repeat) would silently swallow every later record of that instrument.
+        last_sequence: dict[str, int] = {}
+        for item in self._observations:
+            previous = last_sequence.get(item.instrument)
+            if previous is not None and item.sequence <= previous:
+                raise DomainError("REPLAY_SEQUENCE_NOT_MONOTONIC",
+                                  f"REPLAY_SEQUENCE_NOT_MONOTONIC: {item.instrument} sequence {item.sequence} after {previous}")
+            last_sequence[item.instrument] = item.sequence
         self._cursor = 0
         self._catalog = catalog
         self._store = _ObservationStore(self.source)

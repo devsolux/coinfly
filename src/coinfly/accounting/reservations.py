@@ -50,16 +50,3 @@ def consume_for_fill_tx(
 
 def release_tx(connection: sqlite3.Connection, intent_id: str) -> None:
     connection.execute("UPDATE ex_reservations SET remaining_amount='0' WHERE intent_id=?", (intent_id,))
-
-
-def reserved_tx(
-    connection: sqlite3.Connection, authority_id: str, environment: str, scope_id: str, asset: str
-) -> Decimal:
-    rows = connection.execute(
-        "SELECT remaining_amount FROM ex_reservations WHERE authority_id=? AND environment=? AND scope_id=? AND asset=?",
-        (authority_id, environment, scope_id, asset),
-    ).fetchall()
-    with localcontext(financial_context()) as decimal_context:
-        decimal_context.prec = 512
-        decimal_context.rounding = "ROUND_CEILING"
-        return sum((Decimal(row[0]) for row in rows), Decimal(0))

@@ -324,6 +324,98 @@ class LiveSpotEngineTests(LedgerCase):
         causes = self.writer.call(lambda connection: [tuple(row) for row in connection.execute("SELECT cause FROM cf_intent_causes ORDER BY recorded_at").fetchall()])
         self.assertIn(("PROTECTIVE_DRAIN",), causes)
 
+    def test_restarted_engine_drains_again_without_a_semantic_intent_conflict(self) -> None:
+        from coinfly.risk.drain_policy import DrainPolicy
+
+        self.engine.arm()
+        self.mark()
+        ids = self.engine.submit_target(self.target("0.04"))
+        transport = self.transport
+        buy = {"order_id": "venue-1", "client_order_id": ids[0], "status": "FILLED", "filled_size": "0.4"}
+        buy_fill = {"entry_id": "e1", "trade_id": "t1", "order_id": "venue-1", "price": "100.00", "size": "0.4", "commission": "0",
+                    "side": "BUY", "size_in_quote": False}
+        transport.orders, transport.fills = [buy], [buy_fill]
+        transport.accounts[0]["available_balance"]["value"] = "960.00"
+        transport.accounts[1]["available_balance"]["value"] = "0.4"
+        self.engine.sync(self.clock_now)
+        transport.create_response = {"status": 200, "body": {"success": True, "success_response": {"order_id": "venue-exit-1"}}}
+        original_get = transport.get
+
+        def sells() -> list[dict[str, Any]]:
+            return [body for path, body in transport.posts if path == "/orders" and body["side"] == "SELL"]
+
+        def get(path: str, *, query: Mapping[str, str] | None = None) -> Mapping[str, Any]:
+            orders, fills = [buy], [buy_fill]
+            cancelled = any(path == "/orders/batch_cancel" for path, _ in transport.posts)
+            for index, body in enumerate(sells()):
+                status = ("CANCELLED" if cancelled else "OPEN") if index == 0 else "FILLED"
+                orders.append({"order_id": f"venue-exit-{index + 1}", "client_order_id": body["client_order_id"], "status": status,
+                               "filled_size": "0.4" if status == "FILLED" else "0"})
+                if status == "FILLED":
+                    fills.append({"entry_id": f"x{index}", "trade_id": f"tx{index}", "order_id": f"venue-exit-{index + 1}", "price": "90.00",
+                                  "size": "0.4", "commission": "0", "side": "SELL", "size_in_quote": False})
+            transport.orders, transport.fills = orders, fills
+            return original_get(path, query=query)
+        transport.get = get  # type: ignore[method-assign]
+        # The first drain sends its exit, the venue leaves it resting: the drain reports it is still awaiting liquidity.
+        with self.assertRaises(DomainError) as awaiting:
+            self.engine.drain(DrainPolicy())
+        self.assertEqual(awaiting.exception.code, "DRAIN_AWAITING_LIQUIDITY")
+        self.assertEqual(len(sells()), 1)
+        # Worker restart: a fresh engine on the same ledger sees a different book. Its exit must not collide
+        # with the persisted first exit (same slot, instrument and kind; different price).
+        restarted = LiveSpotEngine(live_config(), live_context(), self.writer, self.reducer, self.interlock,
+                                   transport_factory=lambda: transport, mandate_check=lambda config, now: True, instruments=(BTC,))
+        self.addCleanup(restarted.close_background)
+        restarted.initialize(live_config(), live_context())
+        restarted.recover_existing()
+        restarted.update_market("BTC-USD", bids=(DepthLevel(price=Decimal("90.00"), quantity=Decimal("10")),),
+                                asks=(DepthLevel(price=Decimal("90.20"), quantity=Decimal("10")),), now=self.clock_now)
+        transport.cancel_results = [{"success": True, "order_id": "venue-exit-1"}]
+        transport.create_response = {"status": 200, "body": {"success": True, "success_response": {"order_id": "venue-exit-2"}}}
+        restarted.drain(DrainPolicy())
+        self.assertEqual(len(sells()), 2)
+        self.assertNotEqual(sells()[0]["client_order_id"], sells()[1]["client_order_id"])
+        position = self.writer.call(lambda connection: connection.execute("SELECT quantity FROM ex_positions WHERE instrument='BTC-USD'").fetchone()[0])
+        self.assertEqual(Decimal(position), Decimal(0))
+
+    def test_order_sent_while_sync_walks_the_venue_is_not_external_activity(self) -> None:
+        self.engine.arm()
+        self.mark()
+        transport = self.transport
+        original_get = transport.get
+        raced: list[tuple[str, ...]] = []
+
+        def get(path: str, *, query: Mapping[str, str] | None = None) -> Mapping[str, Any]:
+            if path.endswith("/batch") and not raced:
+                # Another thread persists and sends an intent after sync began and before its walk reads the venue.
+                raced.append(self.engine.submit_target(self.target("0.04")))
+                transport.orders = [{"order_id": "venue-1", "client_order_id": raced[0][0], "status": "OPEN", "filled_size": "0"}]
+            return original_get(path, query=query)
+        transport.get = get  # type: ignore[method-assign]
+        report = self.engine.sync(self.clock_now)
+        self.assertEqual(len(raced[0]), 1)
+        self.assertEqual(report["external_open_orders"], 0)
+        self.assertFalse(self.engine._external_activity)
+
+    def test_genuinely_unknown_open_order_is_still_external_activity_during_a_race(self) -> None:
+        self.engine.arm()
+        self.mark()
+        transport = self.transport
+        original_get = transport.get
+        raced: list[tuple[str, ...]] = []
+
+        def get(path: str, *, query: Mapping[str, str] | None = None) -> Mapping[str, Any]:
+            if path.endswith("/batch") and not raced:
+                raced.append(self.engine.submit_target(self.target("0.04")))
+                transport.orders = [{"order_id": "venue-1", "client_order_id": raced[0][0], "status": "OPEN", "filled_size": "0"},
+                                    {"order_id": "foreign", "client_order_id": "not-ours", "status": "OPEN", "filled_size": "0"}]
+            return original_get(path, query=query)
+        transport.get = get  # type: ignore[method-assign]
+        report = self.engine.sync(self.clock_now)
+        self.assertEqual(report["external_open_orders"], 1)
+        self.assertTrue(self.engine._external_activity)
+
     def test_live_engine_is_spot_only_and_requires_a_live_context(self) -> None:
         with self.assertRaises(DomainError) as refused:
             LiveSpotEngine(live_config().model_copy(update={"product_track": ProductTrack.PERPETUAL}), live_context(), self.writer, self.reducer,

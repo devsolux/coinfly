@@ -12,8 +12,9 @@ Two producers can attest ``libcoinfly_neural`` on this host:
   preserved controller for paper research and satisfies NO release gate.
 * ``BundledKernelVerifier`` — a signed application bundle ships the dylib plus
   the attestation the release build wrote before signing; verification checks
-  the bundle's code signature (``codesign --verify --strict``) and that the
-  signing team matches the running bundle.
+  the kernel's code signature (``codesign --verify --strict``) and that its
+  TeamIdentifier matches the attested signed identity. Comparing that team
+  with the running application's own signature is still release work.
 
 Application startup never compiles anything. A missing or stale attestation
 is reported as ``NATIVE_KERNEL_UNAVAILABLE`` with the exact reason.
@@ -31,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from coinfly.bootstrap.installer import file_sha256
+from coinfly.bootstrap.installer import atomic_write, file_sha256
 from coinfly.bootstrap.manifest import BootstrapError
 from coinfly.research.assets import (
     KERNEL_SOURCE_SHA256,
@@ -149,7 +150,7 @@ def write_development_attestation(binary: Path, *, compiler: str, signed_identit
         "note": "Local research capability only. Satisfies no release gate and no live qualification.",
     }
     target = binary.with_suffix(binary.suffix + ".attestation.json")
-    target.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    atomic_write(target, (json.dumps(document, indent=2) + "\n").encode("utf-8"))
     return target
 
 

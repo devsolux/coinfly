@@ -120,6 +120,25 @@ class ReplayFeedTests(TestCase):
         with self.assertRaisesRegex(DomainError, "REPLAY_FILE_INVALID"):
             ReplayFeed(self.path.with_name("missing.jsonl"))
 
+    def test_a_per_instrument_sequence_restart_is_refused_instead_of_silently_dropped(self) -> None:
+        # The store ignores sequence <= the last one per instrument, so every record after a restart
+        # (two sessions concatenated, a recorder restarted) would vanish without a trace.
+        self.write(observation("BTC-USD", 1), observation("BTC-USD", 2, at=NOW + timedelta(seconds=1)),
+                   observation("BTC-USD", 1, at=NOW + timedelta(seconds=2)))
+        with self.assertRaisesRegex(DomainError, "REPLAY_SEQUENCE_NOT_MONOTONIC.*BTC-USD"):
+            ReplayFeed(self.path)
+        self.write(observation("BTC-USD", 4), observation("BTC-USD", 4, at=NOW + timedelta(seconds=1)))  # a repeat is dropped too
+        with self.assertRaisesRegex(DomainError, "REPLAY_SEQUENCE_NOT_MONOTONIC"):
+            ReplayFeed(self.path)
+
+    def test_instruments_keep_independent_sequences(self) -> None:
+        self.write(observation("BTC-USD", 1), observation("ETH-USD", 1, bid="49.9", ask="50.1", at=NOW + timedelta(seconds=1)),
+                   observation("BTC-USD", 2, at=NOW + timedelta(seconds=2)),
+                   observation("ETH-USD", 2, bid="49.9", ask="50.1", at=NOW + timedelta(seconds=3)))
+        feed = ReplayFeed(self.path)
+        feed.start(["BTC-USD", "ETH-USD"])
+        self.assertEqual(len(feed.poll(NOW + timedelta(seconds=5))), 4)  # nothing is dropped
+
 
 class StalenessTests(TestCase):
     def test_stale_after(self) -> None:

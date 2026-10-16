@@ -139,9 +139,6 @@ class ControllerMode(StrEnum):
     RESEARCH_LEARNING = "RESEARCH_LEARNING"
 
 
-TRAINING_PROFILE_IDS = ("malecns-risk-adjusted-experiment-v2", "malecns-risk-adjusted-experiment-v3")
-
-
 class TrainingSettings(FrozenModel):
     """The declared experimental profile for RESEARCH_LEARNING; nothing is loaded silently.
 
@@ -258,8 +255,6 @@ class StrategyDefinition(FrozenModel):
             raise ValueError("duplicate permitted instruments")
         if set(self.permitted_instruments) & set(self.excluded_instruments):
             raise ValueError("an instrument cannot be both permitted and excluded")
-        if self.per_slot_max_exposure_fraction * self.max_active_slots < Decimal("0.999") and self.max_active_slots > 1:
-            pass  # Under-allocation is allowed; over-allocation is bounded by the budget.
         return self
 
     @property

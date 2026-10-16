@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+from decimal import Decimal
 from threading import RLock
 from typing import Callable, Protocol, TypeVar, cast
 
@@ -49,11 +50,16 @@ class ContextInterlock:
     Future without waiting for its response. The lock covers this initiation, not
     the network wait; SQL transactions are complete before it is called. A process
     ownership lease is a separate deployment requirement.
+
+    ``fee_buffer_fraction`` is the buffer the final-send capital re-check applies;
+    the ``AdmissionActor`` bound to this interlock sets its own configured value so
+    admission and the re-check can never disagree.
     """
 
     def __init__(self, writer: Writer) -> None:
         self.writer = writer
         self.lock = RLock()
+        self.fee_buffer_fraction = Decimal("0.01")
         self._provisional: dict[str, str] = {}
         self.writer.call(lambda connection: connection.execute(AUTHORITY_SCHEMA).rowcount)
 
@@ -151,8 +157,7 @@ class ContextInterlock:
         if require_grant:
             self._validate_grant_tx(connection, intent, risk_increase)
 
-    @staticmethod
-    def _validate_grant_tx(connection: sqlite3.Connection, intent: BoundIntent, risk_increase: bool) -> None:
+    def _validate_grant_tx(self, connection: sqlite3.Connection, intent: BoundIntent, risk_increase: bool) -> None:
         from coinfly.config.models import EngineConfig
         from coinfly.domain.context import Environment
         from coinfly.execution.recovery import context_fact_sequence_tx
@@ -180,13 +185,11 @@ class ContextInterlock:
                 "SELECT effective_config FROM cf_authorities WHERE authority_id=?", (intent.context.authority_id,)).fetchone()[0])
             require_order_mandate_tx(connection, intent, current_config, book, now=now)
         if risk_increase:
-            from decimal import Decimal
-
             from coinfly.execution.models import OrderIntent
             from coinfly.strategy.capital import require_intent_tx
 
             if isinstance(intent, OrderIntent):
-                require_intent_tx(connection, intent, book, fee_buffer_fraction=Decimal("0.01"))
+                require_intent_tx(connection, intent, book, fee_buffer_fraction=self.fee_buffer_fraction)
             config = EngineConfig.model_validate_json(connection.execute("SELECT effective_config FROM cf_authorities WHERE authority_id=?", (intent.context.authority_id,)).fetchone()[0])
             book_ids = (book.scope_id, "authority") if intent.context.environment == Environment.LIVE else (book.scope_id,)
             for book_id in book_ids:

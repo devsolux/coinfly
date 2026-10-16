@@ -95,6 +95,7 @@ class AdmissionActor:
             raise DomainError("INVALID_FEE_BUFFER")
         self.writer, self.interlock, self.margin_model = writer, interlock, margin_model
         self.fee_buffer_fraction, self.clock, self.on_change = fee_buffer_fraction, clock, on_change
+        interlock.fee_buffer_fraction = fee_buffer_fraction  # the final-send re-check uses the same buffer
         self.drawdown = DrawdownStore(writer)
         self.writer.call(self._schema)
 
@@ -199,6 +200,8 @@ class AdmissionActor:
         positions = {row["instrument"]: Decimal(row["quantity"]) for row in position_rows}
         gross = Decimal(0)
         for instrument, quantity in positions.items():
+            if quantity == 0:
+                continue  # a closed position row carries no exposure and needs no mark
             mark = mark_map.get(instrument)
             if mark is None:
                 raise DomainError("POSITION_MARK_UNVERIFIED")

@@ -23,8 +23,6 @@ from coinfly.domain.decimal_math import financial_context
 from coinfly.market.observations import MarketObservation
 
 FEATURE_NAMES = ("mid_offset", "spread_bps", "depth_imbalance", "mid_return_1")
-FEATURE_TICKS = {"mid_offset": None, "spread_bps": Decimal("0.01"), "depth_imbalance": Decimal("0.000001"),
-                 "mid_return_1": None}
 LIMIT = 2**53 - 1
 
 

@@ -49,8 +49,6 @@ from coinfly.domain.context import DomainError
 
 DEFAULT_NEURAL_STATE_BUDGET_BYTES = 512 * 1024 * 1024
 SCALAR_STATE = ("cursor", "sim_ms", "total_spikes")
-IMMUTABLE_GRAPH = ("ids", "ptr", "post", "retina", "uv", "lamina", "sugar", "baseline_plastic", "rest", "tonic",
-                   "modulation_mask")
 
 
 def _digest(array: np.ndarray) -> str:

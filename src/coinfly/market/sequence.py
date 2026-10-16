@@ -4,7 +4,7 @@ Coinbase's channel references (level2, heartbeats; accessed 2026-09-22) define
 ``sequence_num`` as a *per-connection* message sequence to detect dropped or
 out-of-order messages; the WebSocket overview page says sequence numbers are
 increasing integers *for each product*. The two statements disagree
-(DOCUMENT_CONFLICT in ``docs/evidence-matrix.md``). This tracker does not pick
+(see "Sequencing" in ``docs/venues/coinbase-route-verification.md``). This tracker does not pick
 one on faith: every message is judged against both contracts, the contract
 that the stream actually follows is detected from evidence and reported, and
 only an anomaly under the detected contract (or under both while undecided)

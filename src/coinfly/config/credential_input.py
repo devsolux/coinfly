@@ -11,8 +11,6 @@ PEM_PATTERN = re.compile(r"-----BEGIN (EC PRIVATE KEY|PRIVATE KEY)-----\s+[A-Za-
                          r"-----END \1-----\s*\Z")
 MAX_KEY_NAME_LENGTH = 240
 MAX_SECRET_LENGTH = 4096
-_KEY_NAME = KEY_NAME_PATTERN
-_PEM = PEM_PATTERN
 
 
 def normalize_secret(secret: str) -> str:

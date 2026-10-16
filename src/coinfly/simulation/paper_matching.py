@@ -251,6 +251,11 @@ class PaperMatcher:
         return tuple(self._fills)
 
     @property
+    def last_time(self) -> datetime | None:
+        """The matcher's event clock: the latest accepted event time, which never moves backwards."""
+        return self._last_time
+
+    @property
     def balances(self) -> dict[str, Decimal]:
         return dict(self._balances)
 
@@ -272,12 +277,15 @@ class PaperMatcher:
 
     @exact_decimal
     def submit(self, request: PaperOrderRequest, *, now: datetime) -> PaperOrder:
-        self._check_time(now)
+        # Every refusal below leaves the matcher untouched (the clock included),
+        # so a caller can report a proven non-creation without restoring a snapshot.
+        self._validate_time(now)
         existing_id = self._clients.get(request.client_order_id)
         if existing_id is not None:
             existing = self._orders[existing_id]
             if request != existing.request:
                 raise DomainError("PAPER_CLIENT_ID_CONFLICT")
+            self._last_time = now
             return existing
         if len(self._orders) >= 100000:
             raise DomainError("PAPER_ORDER_CAPACITY")
@@ -309,6 +317,7 @@ class PaperMatcher:
                 required += self._pending_margin()
                 if snapshot.available_margin is None or snapshot.available_margin < required:
                     raise DomainError("PAPER_INSUFFICIENT_MARGIN")
+        self._last_time = now
         self._counter += 1
         order = PaperOrder(
             order_id=self._order_identifier(self._counter), request=request, created_at=now,
@@ -318,12 +327,16 @@ class PaperMatcher:
         self._clients[order.client_order_id] = order.order_id
         return order
 
-    @exact_decimal
-    def update_book(
+    def validate_book(
         self, instrument_id: str, *, bids: tuple[DepthLevel, ...], asks: tuple[DepthLevel, ...],
-        now: datetime, sequence: int | None = None,
-    ) -> tuple[PaperFill, ...]:
-        self._check_time(now)
+        now: datetime, sequence: int | None = None, observed_at: datetime | None = None,
+    ) -> int:
+        """Refuse an unacceptable depth update without changing any state; returns the sequence it takes."""
+        self._validate_time(now)
+        if observed_at is not None:
+            _aware(observed_at)
+            if observed_at > now:
+                raise DomainError("PAPER_OBSERVATION_AFTER_CLOCK")
         self._instrument(instrument_id)
         if len(bids) > 1000 or len(asks) > 1000:
             raise DomainError("PAPER_DEPTH_LIMIT")
@@ -337,7 +350,24 @@ class PaperMatcher:
         seq = sequence if sequence is not None else (old.sequence + 1 if old else 0)
         if old is not None and seq <= old.sequence:
             raise DomainError("PAPER_STALE_BOOK_SEQUENCE")
-        self._books[instrument_id] = _Book(instrument_id=instrument_id, bids=bids, asks=asks, as_of=now, sequence=seq)
+        return seq
+
+    @exact_decimal
+    def update_book(
+        self, instrument_id: str, *, bids: tuple[DepthLevel, ...], asks: tuple[DepthLevel, ...],
+        now: datetime, sequence: int | None = None, observed_at: datetime | None = None,
+    ) -> tuple[PaperFill, ...]:
+        """Apply a depth snapshot at event time ``now``.
+
+        ``observed_at`` is when the depth was actually observed (default: ``now``).
+        The event clock may be ahead of it; book age, and so which orders may still
+        fill against it, always follows the observation.
+        """
+        seq = self.validate_book(instrument_id, bids=bids, asks=asks, now=now, sequence=sequence,
+                                 observed_at=observed_at)
+        self._last_time = now
+        self._books[instrument_id] = _Book(instrument_id=instrument_id, bids=bids, asks=asks,
+                                           as_of=now if observed_at is None else observed_at, sequence=seq)
         if self.margin is not None and bids and asks:
             self.margin.set_mark(instrument_id, (bids[0].price + asks[0].price) / 2)
         return self.advance(now=now)
@@ -674,12 +704,15 @@ class PaperMatcher:
         except KeyError as exc:
             raise DomainError("PAPER_UNKNOWN_INSTRUMENT") from exc
 
-    def _check_time(self, now: datetime) -> None:
+    def _validate_time(self, now: datetime) -> None:
         if self._retired_for_rebind:
             raise DomainError("PAPER_CONTEXT_REBOUND")
         _aware(now)
         if self._last_time is not None and now < self._last_time:
             raise DomainError("PAPER_TIME_REGRESSION")
+
+    def _check_time(self, now: datetime) -> None:
+        self._validate_time(now)
         self._last_time = now
 
 

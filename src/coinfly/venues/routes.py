@@ -31,15 +31,6 @@ class BrokerRoute(StrEnum):
     COINBASE_INTX_LEGACY = "COINBASE_INTX_LEGACY"
 
 
-ROUTE_DOCUMENTATION_STATUS: dict[BrokerRoute, str] = {
-    BrokerRoute.PAPER_LOCAL: "local simulator; no network",
-    BrokerRoute.COINBASE_ADVANCED_SPOT: "documented; reviewed 2026-09-21",
-    BrokerRoute.COINBASE_ADVANCED_FUTURES: "documented for CFM (US); EEA/CBFSE API route undocumented; reviewed 2026-09-21",
-    BrokerRoute.COINBASE_GLOBAL_DERIVATIVES: "documented; hard cutover date unpublished; reviewed 2026-09-21",
-    BrokerRoute.COINBASE_INTX_LEGACY: "deprecated; retires at cutover; reviewed 2026-09-21",
-}
-
-
 def route_for(subtype: ProductSubtype, service_entity: str | None) -> BrokerRoute:
     """The route Coinbase documents for a contract model (independent of eligibility)."""
     if subtype is ProductSubtype.SPOT:

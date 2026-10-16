@@ -71,6 +71,9 @@ CATALOG_TTL = timedelta(minutes=10)
 CATALOG_FAILURE_BACKOFF = timedelta(seconds=15)
 HEARTBEAT_SILENCE_SECONDS = 10.0  # heartbeats arrive once per second
 MAX_BACKOFF_SECONDS = 30.0
+# A connection that stayed up this long was healthy (silence past the heartbeat
+# timeout already ends a connection), so the next outage starts a fresh backoff.
+HEALTHY_CONNECTION_SECONDS = 30.0
 # Observations the worker has not polled yet. Past this bound the consumer is
 # too far behind for the books to mean anything: the queue is dropped, the books
 # invalidated and the connection resynchronized (never silently coalesced).
@@ -592,6 +595,7 @@ class CoinbasePublicRestFeed:
                 self._store.set_state(state, f"{error.code} on {instrument}")
                 if error.code == "HTTP_RATE_LIMITED":
                     self._sleep(min(MAX_BACKOFF_SECONDS, self._interval * 2))
+                self._space_requests(started)  # a failing endpoint is not retried back-to-back either
                 continue
             if self._failures >= MAX_CONSECUTIVE_FAILURES:
                 self._store.note_reconnect()
@@ -601,10 +605,13 @@ class CoinbasePublicRestFeed:
                     self._pending.append(observation)
                 produced += 1
             self._store.set_state(FeedState.CONNECTED, f"polled every {self._interval:g}s")
-            elapsed = time.monotonic() - started
-            if elapsed < MIN_REQUEST_SPACING_SECONDS:
-                self._sleep(MIN_REQUEST_SPACING_SECONDS - elapsed)
+            self._space_requests(started)
         return produced
+
+    def _space_requests(self, started: float) -> None:
+        elapsed = time.monotonic() - started
+        if elapsed < MIN_REQUEST_SPACING_SECONDS:
+            self._sleep(MIN_REQUEST_SPACING_SECONDS - elapsed)
 
     def _observation(self, instrument: str, pricebook: Mapping[str, Any]) -> MarketObservation:
         if pricebook.get("product_id") != instrument:
@@ -711,13 +718,18 @@ class CoinbasePublicWebSocketFeed:
         self._pending: list[MarketObservation] = []
         self._pending_lock = threading.Lock()
         self._books: dict[str, _Level2Book] = {}
-        self._counter = 0
+        # Per-instrument observation counters: the store judges continuity per
+        # instrument, so one shared counter would look like gaps on every
+        # multiplexed stream. Venue sequence gaps come from the SequenceTracker.
+        self._counters: dict[str, int] = {}
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._client: WebSocketLike | None = None
         self._client_lock = threading.Lock()
         self._sequence = SequenceTracker()
         self._last_heartbeat_counter: int | None = None
+        self._heartbeat_gap = False  # set by a missed heartbeat, cleared by the next consecutive one
+        self._monotonic = time.monotonic
         self._reconnects = 0
 
     # --- MarketFeed -------------------------------------------------------------------
@@ -764,7 +776,9 @@ class CoinbasePublicWebSocketFeed:
         return self._store.latest(instrument)
 
     def health(self) -> FeedHealth:
-        return self._store.health().model_copy(update={"catalog": self._catalog.report()})
+        health = self._store.health()
+        # The venue's own sequence anomalies, not the store's per-instrument counter continuity.
+        return health.model_copy(update={"catalog": self._catalog.report(), "sequence_gaps": int(health.sequence.get("gaps", 0))})
 
     def poll(self, now: datetime) -> tuple[MarketObservation, ...]:
         with self._pending_lock:
@@ -775,34 +789,41 @@ class CoinbasePublicWebSocketFeed:
     def _run(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
+            started = self._monotonic()
             try:
                 self.run_connection()
-                backoff = 1.0
             except DomainError as error:
-                self._store.set_state(FeedState.DISCONNECTED, error.code)
+                self._connection_lost(error.code)
             except Exception as error:
-                self._store.set_state(FeedState.DISCONNECTED, f"connection failed: {type(error).__name__}")
+                self._connection_lost(f"connection failed: {type(error).__name__}")
             if self._stop.is_set():
                 break
+            if self._monotonic() - started >= HEALTHY_CONNECTION_SECONDS:
+                backoff = 1.0  # run_connection only returns on stop(); a long session ends by an exception
             self._reconnects += 1
             if self._max_reconnects is not None and self._reconnects > self._max_reconnects:
                 self._store.set_state(FeedState.DISCONNECTED, "reconnect budget exhausted")
                 break
             self._store.note_reconnect()
-            self._sleep(backoff + random.uniform(0, backoff / 4))
+            self._sleep(min(MAX_BACKOFF_SECONDS, backoff + random.uniform(0, backoff / 4)))
             backoff = min(MAX_BACKOFF_SECONDS, backoff * 2)
+
+    def _connection_lost(self, detail: str) -> None:
+        # The books belong to the dead connection: nothing may decide on them while the feed reconnects.
+        self._store.invalidate(detail)
+        self._store.set_state(FeedState.DISCONNECTED, detail)
 
     def run_connection(self) -> None:
         """Connect, subscribe, consume until the peer closes, a gap forces a resync, or stop()."""
         client = self._client_factory()
         with self._client_lock:
             self._client = client
-        generation = self._sequence.new_connection()
+        self._sequence.new_connection()
         self._store.set_sequence(self._sequence.describe())
         self._last_heartbeat_counter = None
+        self._heartbeat_gap = False
         for book in self._books.values():
             book.synchronized = False  # a new connection delivers new snapshots; old books are history
-        self._generation = generation
         try:
             client.connect()
             subscribed = list(self._store.subscribed)
@@ -858,8 +879,13 @@ class CoinbasePublicWebSocketFeed:
                 except (TypeError, ValueError):
                     value = None
                 if value is not None:
-                    if self._last_heartbeat_counter is not None and value > self._last_heartbeat_counter + 1:
-                        self._store.set_state(FeedState.DEGRADED, f"heartbeat gap {self._last_heartbeat_counter}->{value}")
+                    last = self._last_heartbeat_counter
+                    if last is not None and value > last + 1:
+                        self._heartbeat_gap = True
+                        self._store.set_state(FeedState.DEGRADED, f"heartbeat gap {last}->{value}")
+                    elif self._heartbeat_gap and last is not None and value == last + 1:
+                        self._heartbeat_gap = False  # heartbeats are consecutive again
+                        self._publish_state()
                     self._last_heartbeat_counter = value
             return
         if channel == "subscriptions":
@@ -881,10 +907,11 @@ class CoinbasePublicWebSocketFeed:
             bids, asks = book.top(self._depth)
             if not bids or not asks or bids[0].price >= asks[0].price:
                 continue  # one-sided or transiently crossed while updates are applied
-            self._counter += 1
+            counter = self._counters.get(instrument, 0) + 1
+            self._counters[instrument] = counter
             observation = MarketObservation(
                 instrument=instrument, bids=bids, asks=asks, observed_at=observed, received_at=max(received, observed),
-                sequence=self._counter, source=self.source,
+                sequence=counter, source=self.source,
                 lineage=f"level2 {event.get('type')} seq {sequence} gen {self._sequence.generation}",
             )
             if self._store.record(observation):
@@ -898,4 +925,14 @@ class CoinbasePublicWebSocketFeed:
                     self._store.note_resync()
                     self._store.invalidate("observation queue overflow; books invalidated, resynchronizing")
                     raise DomainError("WEBSOCKET_QUEUE_OVERFLOW")
-        self._store.set_state(FeedState.CONNECTED, "level2 synchronized")
+        self._publish_state()
+
+    def _publish_state(self) -> None:
+        """CONNECTED only while every subscribed book has its snapshot and the heartbeats are consecutive."""
+        if self._heartbeat_gap:
+            return  # stays DEGRADED until the heartbeats recover; a book update proves nothing about them
+        waiting = [name for name in self._store.subscribed if not (name in self._books and self._books[name].synchronized)]
+        if waiting:
+            self._store.set_state(FeedState.CONNECTING, f"awaiting level2 snapshot: {','.join(waiting[:5])} ({len(waiting)} pending)")
+        else:
+            self._store.set_state(FeedState.CONNECTED, "level2 synchronized")

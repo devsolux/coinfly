@@ -180,8 +180,12 @@ class WebSocketClient:
         parsed = self._parsed
         port = parsed.port or (443 if parsed.scheme == "wss" else 80)
         raw = socket.create_connection((parsed.hostname, port), timeout=self._connect_timeout)
+        # Wrapping detaches the raw socket (its fileno becomes -1), so the failure
+        # path must close whichever socket is outermost, not the raw one.
+        sock: socket.socket = raw
         try:
-            sock: socket.socket = self._tls.wrap_socket(raw, server_hostname=parsed.hostname) if self._tls is not None else raw
+            if self._tls is not None:
+                sock = self._tls.wrap_socket(raw, server_hostname=parsed.hostname)
             key = base64.b64encode(os.urandom(16)).decode("ascii")
             path = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
             request = (f"GET {path} HTTP/1.1\r\nHost: {parsed.hostname}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -210,7 +214,7 @@ class WebSocketClient:
             else:
                 self._pending = []
         except BaseException:
-            raw.close()
+            sock.close()
             raise
 
     _pending: list[Frame]

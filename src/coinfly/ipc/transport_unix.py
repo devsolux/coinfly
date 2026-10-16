@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import queue
 import socket
@@ -29,6 +30,8 @@ from .protocol import (
     error_response,
     result_response,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_SOCKET_PATH_BYTES = 100
 
@@ -194,8 +197,15 @@ class _Connection:
                             self.subscribed = False
                     except Exception as exc:
                         self.subscribed = was_subscribed
-                        code = getattr(exc, "code", "INTERNAL_ERROR")
-                        self.emit(error_response(request_id, code if isinstance(code, str) else "INTERNAL_ERROR"))
+                        code = getattr(exc, "code", None)
+                        if not isinstance(code, str):
+                            # An uncoded exception is a handler defect: record the method and
+                            # exception type (never the message) so INTERNAL_ERROR is traceable.
+                            method = data.get("method")
+                            logger.error("IPC handler failed: method=%s error=%s",
+                                         method if isinstance(method, str) else "?", type(exc).__name__)
+                            code = "INTERNAL_ERROR"
+                        self.emit(error_response(request_id, code))
                 partial_since = (partial_since or time.monotonic()) if decoder.pending else None
         except (OSError, EOFError, RPCError):
             pass

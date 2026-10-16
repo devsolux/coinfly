@@ -5,7 +5,9 @@ intent the automation dispatches for a decoded decision is labeled with the
 decision it traces to, so an entry or strategy exit can always be traced to a
 genuine decoded decision (or to the pipeline fixture that produced it, which is
 labeled as such). Protective drains (context or slot drain, operator stop) and
-risk actions are labeled separately and never counted as strategy trades.
+risk actions are labeled separately and never counted as strategy trades. A venue settlement
+(the synthetic close of an expired paper dated future) is labeled
+``VENUE_SETTLEMENT``: it is booked by the venue model, not decided by anyone.
 
 An intent without a row here is reported as ``UNLABELED``; nothing infers a
 cause from the intent's shape.
@@ -25,8 +27,10 @@ INTENT_CAUSES_SCHEMA: tuple[str, ...] = (
     'CREATE INDEX cf_intent_causes_context ON cf_intent_causes(context_id, cause)',
 )
 
-IntentCause = Literal["DECODED_DECISION_ENTRY", "DECODED_DECISION_EXIT", "PROTECTIVE_DRAIN", "OPERATOR_ACTION"]
-CAUSES: tuple[str, ...] = ("DECODED_DECISION_ENTRY", "DECODED_DECISION_EXIT", "PROTECTIVE_DRAIN", "OPERATOR_ACTION")
+IntentCause = Literal["DECODED_DECISION_ENTRY", "DECODED_DECISION_EXIT", "PROTECTIVE_DRAIN", "OPERATOR_ACTION",
+                      "VENUE_SETTLEMENT"]
+CAUSES: tuple[str, ...] = ("DECODED_DECISION_ENTRY", "DECODED_DECISION_EXIT", "PROTECTIVE_DRAIN", "OPERATOR_ACTION",
+                           "VENUE_SETTLEMENT")
 
 
 def ensure_schema(connection: sqlite3.Connection) -> None:

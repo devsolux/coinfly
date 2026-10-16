@@ -3,7 +3,7 @@
 import secrets
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Callable, Mapping, Protocol, TypeVar
 
@@ -11,13 +11,22 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import Field, SecretStr
 
 from coinfly.domain.context import ContextKey, DomainError, FrozenModel
-from coinfly.security.coinbase_jwt import build_request_jwt, load_es256_private_key, validate_key_name
+from coinfly.security.coinbase_jwt import (
+    JWT_LIFETIME_SECONDS,
+    build_request_jwt,
+    load_es256_private_key,
+    validate_key_name,
+)
 from coinfly.security.credential_realms import CredentialMetadata, CredentialPurpose, CredentialReference
 from coinfly.security.keystore import NativeKeystore
 from coinfly.venues.coinbase.capability_handshake import PermissionEvidence
 from coinfly.venues.coinbase.endpoint_profiles import EndpointProfile, require_registered
 
 T = TypeVar("T")
+
+MAX_PENDING_REQUESTS = 256
+MAX_TRACKED_REQUESTS = 100000
+_TOMBSTONE_RETENTION = timedelta(seconds=JWT_LIFETIME_SECONDS)
 
 
 class _SecretPayload(FrozenModel):
@@ -109,8 +118,12 @@ class SigningGateway:
         self._clock = clock
         self._retired = False
         self._lock = threading.RLock()
-        self._issued: dict[str, tuple[str, datetime, str]] = {}
-        self._consumed: set[str] = set()
+        self._issued: dict[str, tuple[str, datetime, str, str]] = {}
+        # Spent request ids. A read id only has to outlive the token window (a
+        # token older than that is refused anyway), so its tombstone carries a
+        # retain-until time and is pruned once it passes. A mutation id is never
+        # pruned (None): an order request is not silently signed twice.
+        self._consumed: dict[str, datetime | None] = {}
 
     def require_endpoint(self, endpoint: EndpointProfile) -> None:
         require_registered(endpoint)
@@ -153,14 +166,20 @@ class SigningGateway:
         with self._lock:
             now = self._validate(request)
             # Abandoned tokens expire without occupying the pending window
-            # forever. Keep their IDs consumed: never silently reissue a request.
-            for identifier, (_, issued_at, _) in tuple(self._issued.items()):
-                if (now - issued_at).total_seconds() >= 120:
+            # forever. Keep their IDs consumed: a read only for the token window,
+            # a mutation permanently, so an order request is never silently reissued.
+            for identifier, (_, issued_at, _, method) in tuple(self._issued.items()):
+                if (now - issued_at).total_seconds() >= JWT_LIFETIME_SECONDS:
                     self._issued.pop(identifier)
-                    self._consumed.add(identifier)
+                    self._consumed[identifier] = now + _TOMBSTONE_RETENTION if method == "GET" else None
+            # Bound the replay ledger under sustained read traffic: a tombstone
+            # past its token window protects nothing (the token is stale).
+            for identifier, retain_until in tuple(self._consumed.items()):
+                if retain_until is not None and now >= retain_until:
+                    del self._consumed[identifier]
             if request.request_id in self._issued or request.request_id in self._consumed:
                 raise DomainError("SIGNING_REQUEST_ALREADY_ISSUED")
-            if len(self._issued) >= 256 or len(self._issued) + len(self._consumed) >= 100000:
+            if len(self._issued) >= MAX_PENDING_REQUESTS or len(self._issued) + len(self._consumed) >= MAX_TRACKED_REQUESTS:
                 raise DomainError("SIGNING_CAPACITY_EXCEEDED")
             with self._keystore.borrow(
                 self._credential,
@@ -176,7 +195,7 @@ class SigningGateway:
                 hostname = self._endpoint.origin.removeprefix("https://") if self._endpoint.origin else ""
                 token = build_request_jwt(key_name=name, private_key=key, method=request.method, host=hostname,
                                           path=self._endpoint.prefix + request.path, now=now).token
-            self._issued[request.request_id] = (request.digest, now, sha256(token.encode()).hexdigest())
+            self._issued[request.request_id] = (request.digest, now, sha256(token.encode()).hexdigest(), request.method)
             return SignedAuthorization(request.digest, now, token)
 
     def send(self, request: SigningRequest, authorization: SignedAuthorization, invoke: Callable[[], T]) -> T:
@@ -207,14 +226,14 @@ class SigningGateway:
             if (
                 authorization.request_digest != request.digest
                 or (issued is not None and (issued[0] != request.digest or issued[1] != authorization.issued_at))
-                or not 0 <= (now - authorization.issued_at).total_seconds() < 120
+                or not 0 <= (now - authorization.issued_at).total_seconds() < JWT_LIFETIME_SECONDS
             ):
                 raise DomainError("SIGNED_REQUEST_MISMATCH_OR_STALE")
             expected = self._issued.pop(request.request_id, None)
             if expected is None:
                 # Unissued forgeries must not allocate unbounded tombstones.
                 raise DomainError("SIGNED_REQUEST_REPLAY_OR_FORGERY")
-            self._consumed.add(request.request_id)
+            self._consumed[request.request_id] = None if request.method != "GET" else now + _TOMBSTONE_RETENTION
             if not secrets.compare_digest(
                 expected[2], sha256(authorization.token.encode()).hexdigest()
             ):

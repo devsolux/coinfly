@@ -1,20 +1,9 @@
 """Pure exact arithmetic; this guard does not select replacement trades."""
 
-from decimal import Decimal, localcontext
+from decimal import Decimal
 
 from coinfly.domain.context import DomainError
-from coinfly.domain.decimal_math import exact_decimal, financial_context
-
-
-def gross_notional(positions: tuple[tuple[Decimal, Decimal, Decimal], ...]) -> Decimal:
-    with localcontext(financial_context()) as context:
-        context.prec = 100
-        result = Decimal(0)
-        for quantity, price, multiplier in positions:
-            if not all(isinstance(value, Decimal) and value.is_finite() for value in (quantity, price, multiplier)) or price <= 0 or multiplier <= 0:
-                raise DomainError("INVALID_EXPOSURE_INPUT")
-            result += abs(quantity) * price * multiplier
-        return result
+from coinfly.domain.decimal_math import exact_decimal
 
 
 @exact_decimal
