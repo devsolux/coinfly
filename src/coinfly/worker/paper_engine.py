@@ -109,7 +109,10 @@ class LocalPaperEngine:
         self.config, self.context = config, context
         self.writer, self.reducer, self.interlock = writer, reducer, interlock
         self._settled_events: set[str] = set()
-        self._expiry_deferrals: dict[str, str] = {}  # due expiry event id -> reason last reported
+        # Funding boundaries crossed but not yet charged: event id -> (instrument, interval start,
+        # quantity held at the crossing, contract multiplier); and the deferral reason last reported per event.
+        self._funding_due: dict[str, tuple[str, datetime, Decimal, Decimal]] = {}
+        self._deferrals: dict[str, str] = {}
         self._settlement_cursor: datetime | None = None
         self._ready, self._on_change = ready, on_change
         self._lock = threading.RLock()
@@ -599,91 +602,104 @@ class LocalPaperEngine:
         The paper perpetual book applies funding on a fixed schedule per declared
         subtype (``PERPETUAL_NO_EXPIRY``: every 8 h at 00/08/16 UTC;
         ``PERPETUAL_STYLE_FUTURE``: hourly) at the declared synthetic rate
-        (``PAPER_FUNDING_RATE_PER_INTERVAL``, long pays when positive) against the
-        last mark, once per interval (idempotent by event id), journaled as
-        ``PAPER_FUNDING``. A ``DATED_FUTURE`` position is cash-settled at its
-        catalog expiry (``PAPER_EXPIRY_SETTLEMENT``): the margin position and the
-        execution ledger are both closed at the mark by one synthetic, fee-free
-        fill, so lots, positions, journal and risk books agree. Every event is
-        labeled synthetic; none is venue evidence.
+        (``PAPER_FUNDING_RATE_PER_INTERVAL``, long pays when positive), once per
+        interval boundary the clock crosses (idempotent by event id), for the
+        quantity held when it was crossed, journaled as ``PAPER_FUNDING``. A
+        ``DATED_FUTURE`` position is cash-settled at its catalog expiry
+        (``PAPER_EXPIRY_SETTLEMENT``): the margin position and the execution
+        ledger are both closed at the mark by one synthetic, fee-free fill, so
+        lots, positions, journal and risk books agree. Every event is labeled
+        synthetic; none is venue evidence.
 
-        The expiry close realizes P&L permanently, so it is booked only at a mark
-        the paper venue would still fill against: a two-sided book observed no
-        more than the matcher's ``book_max_age`` before ``now``. Otherwise the
-        event is deferred: nothing is booked, it stays unsettled and is retried on
-        every later call, and a ``PAPER_EXPIRY_DEFERRED`` record with reason
-        ``PAPER_EXPIRY_MARK_STALE`` or ``PAPER_EXPIRY_MARK_MISSING`` is returned
-        once per reason. No other mark is ever substituted.
+        Both are booked only at a fresh mark: the mid of a two-sided book observed
+        no more than the matcher's ``book_max_age`` (the age past which no paper
+        order fills) before ``now``. Without one the event stays due and is
+        retried on every later call, and a ``PAPER_FUNDING_DEFERRED`` or
+        ``PAPER_EXPIRY_DEFERRED`` record with reason ``..._MARK_STALE`` or
+        ``..._MARK_MISSING`` is returned once per reason. No other mark is ever
+        substituted. A due funding boundary whose position closed before a fresh
+        mark priced it cannot be charged (the margin book holds funding only
+        against an open position): it is dropped and reported as
+        ``PAPER_FUNDING_NOT_CHARGED`` (``PAPER_FUNDING_POSITION_CLOSED``).
 
         All of it commits together with the matcher snapshot. If that commit fails
-        the in-memory book, the settled-event ids and the settlement cursor are
-        rolled back, so the next call retries the same due events.
+        the in-memory book, the settled-event ids, the due and reported events and
+        the settlement cursor are rolled back, so the next call retries the same
+        due events.
         """
         with self.interlock.lock, self._lock:
             if self._retired or self.matcher.margin is None:
                 return ()
             margin = self.matcher.margin
             events: list[dict[str, Any]] = []
-            deferred: list[dict[str, Any]] = []
+            notices: list[dict[str, Any]] = []
             previous = self._settlement_cursor
             self._settlement_cursor = now
             if previous is None or now <= previous:
                 return ()  # no retroactive funding: boundaries are charged when the clock crosses them
             snapshot: dict[str, object] | None = None  # matcher state before the first mutation
             added: list[str] = []
-            reported = dict(self._expiry_deferrals)
+            due, reported = dict(self._funding_due), dict(self._deferrals)
             try:
+                held = {item.instrument_id: item for item in margin.positions}
+                contracts = {item.instrument_id: item for item in self._instruments}
+                for instrument, position in held.items():
+                    contract = contracts.get(instrument)
+                    interval = PAPER_FUNDING_INTERVALS.get(contract.declared_subtype) if contract is not None else None
+                    if contract is None or interval is None:
+                        continue
+                    boundary = _interval_start(now, interval)
+                    while boundary > previous:
+                        event_id = f"paper-funding:{instrument}:{boundary.strftime('%Y%m%dT%H%M%SZ')}"
+                        if event_id not in self._settled_events:
+                            self._funding_due.setdefault(event_id, (instrument, boundary, position.quantity, contract.contract_multiplier))
+                        boundary -= interval
+                for event_id, (instrument, boundary, quantity, multiplier) in sorted(
+                        self._funding_due.items(), key=lambda item: item[1][1], reverse=True):
+                    if instrument not in held:
+                        del self._funding_due[event_id]
+                        self._deferrals.pop(event_id, None)
+                        notices.append({"kind": "PAPER_FUNDING_NOT_CHARGED", "event_id": event_id, "instrument": instrument,
+                                        "reason": "PAPER_FUNDING_POSITION_CLOSED", "interval_start": boundary.isoformat(), "synthetic": True})
+                        continue
+                    mark, observed = self._settlement_mark(instrument, now)
+                    if mark is None:
+                        self._defer(notices, "PAPER_FUNDING", event_id, instrument, observed, interval_start=boundary.isoformat())
+                        continue
+                    if snapshot is None:
+                        snapshot = self.matcher.dump_state()
+                    payment = -(PAPER_FUNDING_RATE_PER_INTERVAL * quantity * mark * multiplier)
+                    applied = margin.apply_funding(event_id, instrument, payment)
+                    self._settled_events.add(event_id)
+                    added.append(event_id)
+                    del self._funding_due[event_id]
+                    self._deferrals.pop(event_id, None)
+                    if applied:
+                        events.append({"kind": "PAPER_FUNDING", "event_id": event_id, "instrument": instrument, "payment": str(payment),
+                                       "quantity": str(quantity), "mark": str(mark), "rate": str(PAPER_FUNDING_RATE_PER_INTERVAL),
+                                       "synthetic": True, "interval_start": boundary.isoformat()})
                 for position in margin.positions:
                     instrument = position.instrument_id
-                    contract = next((item for item in self._instruments if item.instrument_id == instrument), None)
-                    if contract is None:
+                    contract = contracts.get(instrument)
+                    if contract is None or contract.declared_subtype is not ProductSubtype.DATED_FUTURE \
+                            or contract.expiry is None or now < contract.expiry:
                         continue
-                    depth = self._depth.get(instrument)
-                    mark: Decimal | None = None
-                    observed: datetime | None = None
-                    if depth is not None and depth[0] and depth[1]:
-                        mark, observed = (depth[0][0].price + depth[1][0].price) / 2, depth[2]
-                    subtype = contract.declared_subtype
-                    interval = PAPER_FUNDING_INTERVALS.get(subtype)
-                    if interval is not None and mark is not None:
-                        boundary = _interval_start(now, interval)
-                        while boundary > previous:
-                            stamp = boundary.strftime("%Y%m%dT%H%M%SZ")
-                            event_id = f"paper-funding:{instrument}:{stamp}"
-                            if event_id not in self._settled_events:
-                                if snapshot is None:
-                                    snapshot = self.matcher.dump_state()
-                                payment = -(PAPER_FUNDING_RATE_PER_INTERVAL * position.quantity * mark * contract.contract_multiplier)
-                                applied = margin.apply_funding(event_id, instrument, payment)
-                                self._settled_events.add(event_id)
-                                added.append(event_id)
-                                if applied:
-                                    events.append({"kind": "PAPER_FUNDING", "event_id": event_id, "instrument": instrument, "payment": str(payment),
-                                                   "rate": str(PAPER_FUNDING_RATE_PER_INTERVAL), "synthetic": True,
-                                                   "interval_start": boundary.isoformat()})
-                            boundary -= interval
-                    expiry = getattr(contract, "expiry", None)
-                    if subtype is ProductSubtype.DATED_FUTURE and expiry is not None and now >= expiry:
-                        event_id = f"{PAPER_EXPIRY_PREFIX}{instrument}:{expiry.strftime('%Y%m%dT%H%M%SZ')}"
-                        if event_id not in self._settled_events:
-                            max_age = self.matcher.book_max_age
-                            if mark is None or observed is None or now - observed > max_age:
-                                reason = "PAPER_EXPIRY_MARK_MISSING" if observed is None else "PAPER_EXPIRY_MARK_STALE"
-                                if self._expiry_deferrals.get(event_id) != reason:
-                                    self._expiry_deferrals[event_id] = reason
-                                    deferred.append({"kind": "PAPER_EXPIRY_DEFERRED", "event_id": event_id, "instrument": instrument,
-                                                     "reason": reason, "mark_observed_at": observed.isoformat() if observed is not None else None,
-                                                     "max_mark_age_seconds": str(max_age.total_seconds()), "synthetic": True})
-                                continue
-                            if snapshot is None:
-                                snapshot = self.matcher.dump_state()
-                            realized = margin.apply_fill(instrument, -position.quantity, mark, multiplier=contract.contract_multiplier,
-                                                         fee=Decimal(0), reduce_only=True)
-                            self._settled_events.add(event_id)
-                            self._expiry_deferrals.pop(event_id, None)
-                            added.append(event_id)
-                            events.append({"kind": "PAPER_EXPIRY_SETTLEMENT", "event_id": event_id, "instrument": instrument,
-                                           "quantity": str(position.quantity), "mark": str(mark), "realized": str(realized), "synthetic": True})
+                    event_id = f"{PAPER_EXPIRY_PREFIX}{instrument}:{contract.expiry.strftime('%Y%m%dT%H%M%SZ')}"
+                    if event_id in self._settled_events:
+                        continue
+                    mark, observed = self._settlement_mark(instrument, now)
+                    if mark is None:
+                        self._defer(notices, "PAPER_EXPIRY", event_id, instrument, observed)
+                        continue
+                    if snapshot is None:
+                        snapshot = self.matcher.dump_state()
+                    realized = margin.apply_fill(instrument, -position.quantity, mark, multiplier=contract.contract_multiplier,
+                                                 fee=Decimal(0), reduce_only=True)
+                    self._settled_events.add(event_id)
+                    self._deferrals.pop(event_id, None)
+                    added.append(event_id)
+                    events.append({"kind": "PAPER_EXPIRY_SETTLEMENT", "event_id": event_id, "instrument": instrument,
+                                   "quantity": str(position.quantity), "mark": str(mark), "realized": str(realized), "synthetic": True})
                 incidents: list[str] = []
                 if events:
                     def save(connection: sqlite3.Connection) -> None:
@@ -709,14 +725,39 @@ class LocalPaperEngine:
                 if snapshot is not None:
                     self._matcher = PaperMatcher.restore(self.context, self._instruments, snapshot)
                 self._settled_events.difference_update(added)
-                self._expiry_deferrals = reported
+                self._funding_due, self._deferrals = due, reported
                 self._settlement_cursor = previous
                 raise
             for incident in incidents:
                 self.interlock.provisional_fence(self.context.authority_id, incident)
-            if events or deferred:
+            if events or notices:
                 self._notify()
-            return (*events, *deferred)
+            return (*events, *notices)
+
+    def _settlement_mark(self, instrument: str, now: datetime) -> tuple[Decimal | None, datetime | None]:
+        """The mid a settlement may book at ``now``, and when its book was observed.
+
+        No mid without a two-sided book (then no observation time either), or when
+        that book is older than the matcher's ``book_max_age``.
+        """
+        depth = self._depth.get(instrument)
+        if depth is None or not depth[0] or not depth[1]:
+            return None, None
+        bids, asks, observed = depth
+        if now - observed > self.matcher.book_max_age:
+            return None, observed
+        return (bids[0].price + asks[0].price) / 2, observed
+
+    def _defer(self, notices: list[dict[str, Any]], kind: str, event_id: str, instrument: str,
+               observed: datetime | None, **detail: str) -> None:
+        """Report a settlement event left due for want of a fresh mark, once per reason."""
+        reason = f"{kind}_MARK_MISSING" if observed is None else f"{kind}_MARK_STALE"
+        if self._deferrals.get(event_id) == reason:
+            return
+        self._deferrals[event_id] = reason
+        notices.append({"kind": f"{kind}_DEFERRED", "event_id": event_id, "instrument": instrument, "reason": reason,
+                        "mark_observed_at": observed.isoformat() if observed is not None else None,
+                        "max_mark_age_seconds": str(self.matcher.book_max_age.total_seconds()), **detail, "synthetic": True})
 
     @exact_decimal
     def _settle_expiry_tx(self, connection: sqlite3.Connection, event: dict[str, Any]) -> FillResult:

@@ -120,17 +120,25 @@ intent cause `VENUE_SETTLEMENT`, never as a strategy trade. Both appear in
 `automation.status.settlements` as synthetic. None of this is presented as
 venue behavior.
 
-Expiry settles only at a fresh mark: a two-sided book observed no more than the
-paper venue's book age limit (`book_max_age`, 5 s, the same bound a resting
-order needs to fill) before the settlement check. If the contract's book is
-older (for example, the venue stopped quoting it or the feed or worker was
-down across expiry) or missing (no book since a restart), nothing is booked.
-The position, ledger and risk books stay open, and settlement is retried on
-every later tick until a fresh book arrives. Each deferral appears once in
-`automation.status.settlements` as `PAPER_EXPIRY_DEFERRED` with reason
-`PAPER_EXPIRY_MARK_STALE` or `PAPER_EXPIRY_MARK_MISSING` and the mark's
-observation time. No substitute mark is ever used, and new targets are refused
-(`POSITION_MARK_UNVERIFIED`) while any open position lacks a fresh mark.
+Funding and expiry are booked only at a fresh mark: a two-sided book observed
+no more than the paper venue's book age limit (`book_max_age`, 5 s, the same
+bound a resting order needs to fill) before the settlement check. If the
+contract's book is older (for example, the venue stopped quoting it or the
+feed or worker was down at the boundary or expiry) or missing (no book since a
+restart), nothing is booked and the event stays due. It is retried on every
+later tick until a fresh book arrives. A crossed funding boundary is then
+charged for the quantity held when it was crossed, at that fresh mark. An
+expiring position, ledger and risk books stay open until then. Each deferral
+appears once in `automation.status.settlements` as `PAPER_FUNDING_DEFERRED` or
+`PAPER_EXPIRY_DEFERRED`, with reason `..._MARK_STALE` or `..._MARK_MISSING` and
+the mark's observation time. A due funding boundary whose position closed
+before any fresh mark priced it is not charged; it is reported as
+`PAPER_FUNDING_NOT_CHARGED` (`PAPER_FUNDING_POSITION_CLOSED`). Due funding
+boundaries live in the worker's memory and, like the settlement clock, do not
+survive a restart. A due expiry does, because it is checked against the
+contract's expiry on every tick. No substitute mark is ever used, and new
+targets are refused (`POSITION_MARK_UNVERIFIED`) while any open position lacks
+a fresh mark.
 
 ## 5. Pause, stop, restart
 

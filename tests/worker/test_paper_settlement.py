@@ -45,6 +45,7 @@ class PaperSettlementTests(DerivativesFixture):
         now = datetime.now(timezone.utc)
         self.assertEqual(engine.settle(now + timedelta(seconds=1)), ())  # inside the current 8 h interval: nothing
         boundary = _interval_start(now, timedelta(hours=8)) + timedelta(hours=8)
+        self.refresh_mark(engine, boundary)
         events = engine.settle(boundary + timedelta(seconds=1))
         self.assertEqual(len(events), 1)
         [event] = events
@@ -56,6 +57,7 @@ class PaperSettlementTests(DerivativesFixture):
         # Idempotent per boundary; a later call inside the same interval charges nothing.
         self.assertEqual(engine.settle(boundary + timedelta(seconds=2)), ())
         # Two boundaries crossed at once are two events.
+        self.refresh_mark(engine, boundary + timedelta(hours=16))
         events = engine.settle(boundary + timedelta(hours=16, seconds=1))
         self.assertEqual([item["interval_start"] for item in events],
                          [(boundary + timedelta(hours=16)).isoformat(), (boundary + timedelta(hours=8)).isoformat()])
@@ -190,6 +192,7 @@ class PaperSettlementTests(DerivativesFixture):
         now = datetime.now(timezone.utc)
         boundary = _interval_start(now, timedelta(hours=8)) + timedelta(hours=8)
         self.assertEqual(engine.settle(now + timedelta(seconds=1)), ())
+        self.refresh_mark(engine, boundary)
         with patch.object(engine, "_persist_tx", side_effect=DomainError("SIMULATED_COMMIT_FAILURE")):
             with self.assertRaisesRegex(DomainError, "SIMULATED_COMMIT_FAILURE"):
                 engine.settle(boundary + timedelta(seconds=1))
@@ -204,6 +207,56 @@ class PaperSettlementTests(DerivativesFixture):
         self.assertEqual(self.durable_collateral(), charged)
         self.assertEqual(self.journal_kinds().count("PAPER_FUNDING"), 1)
         self.assertEqual(engine.settle(boundary + timedelta(seconds=3)), ())
+
+    def crossed_at_a_stale_mark(self) -> tuple[Any, datetime, dict[str, Any]]:
+        engine = self.open_long()
+        now = datetime.now(timezone.utc)
+        boundary = _interval_start(now, timedelta(hours=8)) + timedelta(hours=8)
+        self.assertEqual(engine.settle(now + timedelta(seconds=1)), ())
+        self.collateral = engine.matcher.margin.collateral
+        # The last BTC-USD book was observed when the long opened, hours before the boundary.
+        [deferred] = engine.settle(boundary + timedelta(seconds=1))
+        self.assertEqual((deferred["kind"], deferred["reason"], deferred["instrument"], deferred["interval_start"], deferred["synthetic"]),
+                         ("PAPER_FUNDING_DEFERRED", "PAPER_FUNDING_MARK_STALE", "BTC-USD", boundary.isoformat(), True))
+        return engine, boundary, deferred
+
+    def test_funding_at_a_stale_mark_is_deferred_and_charged_at_the_next_fresh_mark(self) -> None:
+        engine, boundary, deferred = self.crossed_at_a_stale_mark()
+        margin = engine.matcher.margin
+        # Nothing is charged, in memory or durably.
+        self.assertEqual((margin.collateral, self.durable_collateral()), (self.collateral, self.collateral))
+        self.assertEqual(self.journal_kinds().count("PAPER_FUNDING"), 0)
+        # Reported once per reason; the cursor moves on but the crossed boundary stays due.
+        self.assertEqual(engine.settle(boundary + timedelta(seconds=2)), ())
+        engine._depth.pop("BTC-USD")
+        [missing] = engine.settle(boundary + timedelta(seconds=3))
+        self.assertEqual((missing["kind"], missing["reason"]), ("PAPER_FUNDING_DEFERRED", "PAPER_FUNDING_MARK_MISSING"))
+        # A book no older than the venue's limit charges that boundary, for the quantity held when it was crossed.
+        observed = boundary + timedelta(seconds=4)
+        self.refresh_mark(engine, observed, "100.00", "100.20")
+        [event] = engine.settle(observed + engine.matcher.book_max_age)
+        self.assertEqual((event["kind"], event["event_id"], event["interval_start"]),
+                         ("PAPER_FUNDING", deferred["event_id"], boundary.isoformat()))
+        expected = -(PAPER_FUNDING_RATE_PER_INTERVAL * Decimal("0.04") * Decimal("100.10"))
+        self.assertEqual(Decimal(event["payment"]), expected)
+        self.assertEqual((margin.collateral, self.durable_collateral()), (self.collateral + expected, self.collateral + expected))
+        self.assertEqual(self.journal_kinds().count("PAPER_FUNDING"), 1)
+        self.assertEqual(engine.settle(observed + timedelta(minutes=1)), ())
+        Journal(self.worker.writer).verify()
+
+    def test_funding_due_on_a_position_closed_before_a_fresh_mark_is_reported_not_charged(self) -> None:
+        engine, boundary, deferred = self.crossed_at_a_stale_mark()
+        margin = engine.matcher.margin
+        # The position closes before any fresh mark prices the boundary (as a resting exit filling at the returning book would).
+        margin.apply_fill("BTC-USD", Decimal("-0.04"), Decimal("99.85"), multiplier=Decimal(1), fee=Decimal(0), reduce_only=True)
+        collateral = margin.collateral
+        self.refresh_mark(engine, boundary + timedelta(seconds=2))
+        [dropped] = engine.settle(boundary + timedelta(seconds=3))
+        self.assertEqual((dropped["kind"], dropped["reason"], dropped["event_id"]),
+                         ("PAPER_FUNDING_NOT_CHARGED", "PAPER_FUNDING_POSITION_CLOSED", deferred["event_id"]))
+        self.assertEqual(margin.collateral, collateral)
+        self.assertEqual(self.journal_kinds().count("PAPER_FUNDING"), 0)
+        self.assertEqual(engine.settle(boundary + timedelta(seconds=4)), ())
 
     def test_failed_expiry_commit_leaves_margin_and_ledger_open_until_the_retry(self) -> None:
         engine = self.open_long()
