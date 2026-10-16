@@ -166,13 +166,28 @@ currencies, market-data requirements (max age, depth, warm-up, window),
 universe filters (tradable, spread, top-of-book notional, volume, order),
 `max_active_slots`, `capital_budget`, per-slot exposure fraction, execution
 settings (below), derivative permissions (leverage ≤ 10, directions, margin
-mode, reversal; `margin_mode` and `max_maintenance_utilization` are stored and
-digested but not yet enforced, since the paper book uses one pooled linear
-margin), `learning_enabled` (research mode only), permitted
-environments, `excluded_instruments` (operator exclusions, rejected as
-`EXCLUDED_BY_OPERATOR`; overlap with the permitted list is invalid). Only
+mode, reversal, maintenance-utilization ceiling; see below), `learning_enabled`
+(research mode only), permitted environments, `excluded_instruments` (operator
+exclusions, rejected as `EXCLUDED_BY_OPERATOR`; overlap with the permitted list is invalid). Only
 strategy schema 3 is accepted; any other `schema_version` is rejected, not upgraded. The
 full JSON is stored in `cf_automation.config_json`; its digest is shown in status.
+
+Derivative margin permissions are enforced, or refused, rather than stored for
+display only:
+
+- `margin_mode`: only `CROSS` is implemented. The paper perpetual book is one
+  pooled linear margin, so `ISOLATED` has no distinct semantics and is refused
+  with `MARGIN_MODE_UNSUPPORTED` at configure, at enable and on every tick; it
+  is never run silently as `CROSS`.
+- `max_maintenance_utilization` (default 0.5, strictly between 0 and 1): risk
+  admission rejects a risk-increasing perpetual order with
+  `MAINTENANCE_UTILIZATION_LIMIT` when the projected maintenance margin divided
+  by eligible equity exceeds it in any margin scenario (base or stressed). The
+  order is rejected, never resized; reduce-only exits are not blocked by it.
+  With the synthetic paper fractions (10 % initial, 5 % maintenance, 10 %
+  adverse stress), any order that passes the initial-margin headroom projects
+  at most about 0.45 utilization, so the ceiling changes outcomes only when it
+  is declared below that.
 
 Execution settings (`ExecutionSettings`):
 

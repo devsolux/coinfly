@@ -424,7 +424,7 @@ class LiveSpotEngine:
 
     # ------------------------------------------------------------------ targets and orders
     def submit_target(self, target: BoundTarget, *, constraint: Callable[[PlannedDelta, ActiveBookSnapshot], PlannedDelta] | None = None,
-                      cause: dict[str, Any] | None = None) -> tuple[str, ...]:
+                      cause: dict[str, Any] | None = None, max_maintenance_utilization: Decimal | None = None) -> tuple[str, ...]:
         if target.context != self.context or not self._armed or self._quiesced:
             raise DomainError("STALE_OR_UNARMED_TARGET")
         gateway = self._require_gateway()
@@ -472,7 +472,7 @@ class LiveSpotEngine:
                                  instrument=delta.instrument, base_asset=contract.base_currency, quote_asset=contract.quote_currency,
                                  side=delta.side, kind=delta.kind, quantity=delta.quantity, limit_price=delta.limit_price,
                                  contract_multiplier=delta.contract_multiplier, child_index=child)
-            record = self.admission.admit(intent)
+            record = self.admission.admit(intent, max_maintenance_utilization=max_maintenance_utilization)
             if cause is not None:
                 self._record_cause(record.intent.intent_id, delta.kind, cause)
             Dispatcher(self.writer, self.interlock, gateway, reducer=self.reducer).dispatch(record.intent.intent_id)

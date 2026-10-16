@@ -145,7 +145,17 @@ class AdmissionActor:
         self._notify()
         return version
 
-    def admit(self, intent: OrderIntent) -> IntentRecord:
+    def admit(self, intent: OrderIntent, *, max_maintenance_utilization: Decimal | None = None) -> IntentRecord:
+        """Admit ``intent`` or raise a coded DomainError; a guard never resizes or replaces it.
+
+        ``max_maintenance_utilization`` is the strategy's declared ceiling on
+        maintenance margin / eligible equity for risk-increasing perpetual orders,
+        checked against every margin scenario (None: no strategy ceiling applies).
+        """
+        if max_maintenance_utilization is not None and (
+                not isinstance(max_maintenance_utilization, Decimal) or not max_maintenance_utilization.is_finite()
+                or not 0 < max_maintenance_utilization < 1):
+            raise DomainError("INVALID_MAINTENANCE_UTILIZATION_LIMIT")
         with self.interlock.lock:
             def admission(connection: sqlite3.Connection) -> IntentRecord:
                 previous = connection.execute("SELECT intent_id,payload_json FROM ex_intents WHERE semantic_key=?", (intent.semantic_key,)).fetchone()
@@ -172,7 +182,7 @@ class AdmissionActor:
                     raise DomainError("EXECUTION_QUOTE_CONVERSION_UNCERTIFIED")
                 with localcontext(financial_context()) as decimal_context:
                     decimal_context.prec = 100
-                    reservation = self._evaluate_tx(connection, intent, book, config)
+                    reservation = self._evaluate_tx(connection, intent, book, config, max_maintenance_utilization)
                     record = prepare_tx(connection, intent, reservation)
                 expires = min(book.expires_at, self.clock() + timedelta(seconds=5))
                 connection.execute("INSERT INTO cf_risk_grants VALUES(?,?,?,?,?,0)", (record.intent.intent_id, intent.context.identity, intent.scope_id, row["version"], expires.isoformat()))
@@ -181,7 +191,8 @@ class AdmissionActor:
         self._notify()
         return record
 
-    def _evaluate_tx(self, connection: sqlite3.Connection, intent: OrderIntent, book: ActiveBookSnapshot, config: EngineConfig) -> Reservation:
+    def _evaluate_tx(self, connection: sqlite3.Connection, intent: OrderIntent, book: ActiveBookSnapshot, config: EngineConfig,
+                     max_maintenance_utilization: Decimal | None = None) -> Reservation:
         now = self.clock()
         risk_increase = intent.kind == IntentKind.ENTRY
         from coinfly.strategy.capital import require_intent_tx
@@ -268,6 +279,8 @@ class AdmissionActor:
                     raise DomainError("MARGIN_SCENARIOS_UNVERIFIED")
                 for scenario in scenarios:
                     scenario.require_safe()
+                    if max_maintenance_utilization is not None and scenario.maintenance_utilization > max_maintenance_utilization:
+                        raise DomainError("MAINTENANCE_UTILIZATION_LIMIT")
             else:
                 assert isinstance(self.margin_model, ReductionMarginModel)
                 mark = mark_map[intent.instrument]

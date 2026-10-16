@@ -14,12 +14,13 @@ from coinfly.control.slot_service import SlotRecord, SlotService, SlotStopProof
 from coinfly.domain.context import ContextKey, DomainError, Environment, ProductTrack, RegionPolicy
 from coinfly.execution.dispatcher import Dispatcher
 from coinfly.execution.intent_store import IntentStore
-from coinfly.execution.models import OrderIntent, Side, Submission
+from coinfly.execution.models import IntentKind, OrderIntent, Side, Submission
 from coinfly.execution.recovery import assert_context_closed_tx
 from coinfly.risk.admission_actor import ActiveBookSnapshot, AdmissionActor, AvailableAsset, ExecutionMark
 from coinfly.risk.context_interlock import ContextInterlock
 from coinfly.risk.drain_policy import DrainPolicy
 from coinfly.risk.margin_models import MarginReductionEvidence, MarginScenario, ReductionScenario
+from coinfly.simulation.paper_margin_model import PaperLinearMarginModel
 from coinfly.storage.writer import Writer
 from coinfly.strategy.ownership import StrategyOwnership
 
@@ -280,3 +281,77 @@ class RiskAdmissionTests(unittest.TestCase):
                 ("slot", self.context.identity, "strategy@1", "BTC-USD", "100", "ACTIVE", "test", now, now))))
         record = self.actor.admit(self.intent(quantity="10"))
         self.interlock.validate(record.intent)
+
+
+class PerpetualMaintenanceUtilizationTests(unittest.TestCase):
+    """The strategy's ``max_maintenance_utilization`` rejects (never resizes) a risk-increasing perpetual order.
+
+    The paper linear margin keeps 5 % of gross as maintenance margin and stresses the
+    whole projected gross by 10 % against the book. A 6 @ 10 buy on 100 of collateral
+    projects 3 / 100 = 0.03 in the base scenario and 3 / 94 ≈ 0.0319 in the stressed one.
+    """
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.writer = Writer(Path(self.temp.name) / "risk.sqlite")
+        self.interlock = ContextInterlock(self.writer)
+        self.actor = AdmissionActor(self.writer, self.interlock, margin_model=PaperLinearMarginModel(), fee_buffer_fraction=Decimal(0))
+        self.context = ContextKey(authority_id="authority", environment=Environment.SANDBOX, product_track=ProductTrack.PERPETUAL,
+                                  broker_profile_id="paper-local", epoch=1)
+        config = EngineConfig(authority_id="authority", region_policy=RegionPolicy.GLOBAL, product_track=ProductTrack.PERPETUAL,
+                              execution_scope=("book",), limits=RiskLimits(max_order_notional=Decimal(100), max_gross_exposure=Decimal(10)))
+        self.writer.call(lambda connection: connection.execute(
+            "INSERT INTO cf_authorities(authority_id,effective_context,effective_config,effective_revision,transition_epoch,engine_state,armed,admissions_fenced) VALUES(?,?,?,?,?,'ACTIVE',1,0)",
+            ("authority", self.context.model_dump_json(), config.model_dump_json(), 1, 1),
+        ).rowcount)
+        self.slots = SlotService(self.writer, self.interlock, NoTradeSlotDriver())
+        self.slots.create(slot_id="slot", context=self.context, scope_id="book", instrument="BTC-USD", expected_config_revision=1, request_id="create")
+        self.slots.start("slot", expected_revision=1, expected_epoch=1, request_id="start")
+        now = datetime.now(timezone.utc)
+        self.actor.drawdown.record(self.context, "book", equity=Decimal(100), evidence_id="initial", observed_at=now-timedelta(seconds=2))
+        self.actor.observe(ActiveBookSnapshot(
+            context=self.context, scope_id="book", evidence_id="paper-perpetual-1", observed_at=now, expires_at=now+timedelta(seconds=30),
+            fact_sequence=0, reporting_currency="USD", funded_equity=Decimal(100), eligible_collateral=Decimal(100),
+            available_assets=(AvailableAsset(asset="USD", amount=Decimal(100)),),
+            marks=(ExecutionMark(instrument="BTC-USD", price=Decimal(10)),),
+            complete_execution_scope=True, authoritative_account_evidence=True, conflicting_external_activity=False,
+        ))
+
+    def tearDown(self) -> None:
+        self.slots.close()
+        self.writer.close()
+        self.temp.cleanup()
+
+    def intent(self, *, side: Side = Side.BUY, kind: IntentKind = IntentKind.ENTRY, quantity: str = "6", revision: int = 1) -> OrderIntent:
+        return OrderIntent(context=self.context, scope_id="book", profile_version=1, signer_version=0, slot_id="slot",
+                           allocation_revision=revision, instrument="BTC-USD", base_asset="BTC", quote_asset="USD",
+                           side=side, kind=kind, quantity=Decimal(quantity), limit_price=Decimal(10))
+
+    def intent_count(self) -> int:
+        return int(self.writer.call(lambda connection: connection.execute("SELECT COUNT(*) FROM ex_intents").fetchone()[0]))
+
+    def test_entry_above_the_limit_in_any_scenario_is_rejected_without_a_reservation(self) -> None:
+        # The base scenario sits exactly at 0.03 (not above); the stressed scenario exceeds it.
+        with self.assertRaisesRegex(DomainError, "MAINTENANCE_UTILIZATION_LIMIT"):
+            self.actor.admit(self.intent(), max_maintenance_utilization=Decimal("0.03"))
+        self.assertEqual(self.intent_count(), 0)
+        self.assertEqual(self.writer.call(lambda connection: connection.execute("SELECT COUNT(*) FROM ex_reservations").fetchone()[0]), 0)
+
+    def test_entry_within_the_limit_is_admitted_at_its_planned_quantity(self) -> None:
+        record = self.actor.admit(self.intent(), max_maintenance_utilization=Decimal("0.04"))
+        self.assertEqual(record.intent.quantity, Decimal(6))
+        self.assertEqual(record.reservation_remaining, Decimal("6.12"))  # 60 * (10 % initial + 0.2 % fee buffer)
+
+    def test_invalid_limit_is_refused(self) -> None:
+        for limit in (Decimal(0), Decimal(1), Decimal("NaN"), 0.5):
+            with self.subTest(limit=limit), self.assertRaisesRegex(DomainError, "INVALID_MAINTENANCE_UTILIZATION_LIMIT"):
+                self.actor.admit(self.intent(), max_maintenance_utilization=limit)  # type: ignore[arg-type]
+        self.assertEqual(self.intent_count(), 0)
+
+    def test_reduction_is_never_blocked_by_the_limit(self) -> None:
+        self.writer.call(lambda connection: connection.execute(
+            "INSERT INTO ex_positions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("authority", "SANDBOX", "book", self.context.identity, "BTC-USD", "BTC", "USD", "6", "10", "0", "0")).rowcount)
+        record = self.actor.admit(self.intent(side=Side.SELL, kind=IntentKind.EXIT, quantity="6"),
+                                  max_maintenance_utilization=Decimal("0.0001"))
+        self.assertEqual(record.intent.quantity, Decimal(6))

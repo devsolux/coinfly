@@ -330,6 +330,10 @@ class AutomationController:
             raise DomainError("STRATEGY_QUOTE_MISMATCH")
         if strategy.controller_profile is ControllerProfile.FIXTURE_SEQUENCE_V1 and context.environment is not Environment.SANDBOX:
             raise DomainError("FIXTURE_CONTROLLER_SANDBOX_ONLY")
+        # The paper perpetual book is one pooled linear margin; ISOLATED has no
+        # implemented semantics, so it is refused instead of silently run as CROSS.
+        if strategy.derivatives is not None and strategy.derivatives.margin_mode != "CROSS":
+            raise DomainError("MARGIN_MODE_UNSUPPORTED")
 
     def _effective(self) -> tuple[ContextKey | None, EngineConfig | None]:
         status = self.coordinator.status(self.authority_id)
@@ -1384,7 +1388,9 @@ class AutomationController:
         try:
             intent_ids = engine.submit_target(bound, constraint=constrain,
                                               cause={"decision_id": decision.decision_id, "controller_profile": decision.controller_profile,
-                                                     "pipeline_fixture": decision.pipeline_fixture})
+                                                     "pipeline_fixture": decision.pipeline_fixture},
+                                              max_maintenance_utilization=config.strategy.derivatives.max_maintenance_utilization
+                                              if config.strategy.derivatives else None)
         except DomainError as error:
             return record.model_copy(update={"outcome": "RISK_REJECTED", "outcome_code": error.code,
                                              "provenance": {**record.provenance, "turnover": turnover_notes}})

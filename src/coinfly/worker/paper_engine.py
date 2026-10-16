@@ -1010,7 +1010,7 @@ class LocalPaperEngine:
 
     @exact_decimal
     def submit_target(self, target: BoundTarget, *, constraint: Callable[[PlannedDelta, ActiveBookSnapshot], PlannedDelta] | None = None,
-                      cause: dict[str, Any] | None = None) -> tuple[str, ...]:
+                      cause: dict[str, Any] | None = None, max_maintenance_utilization: Decimal | None = None) -> tuple[str, ...]:
         """Trusted weight boundary; no GUI/model-supplied balance or route is read.
 
         ``constraint`` (the strategy's declared execution policy, e.g. the exact
@@ -1018,6 +1018,8 @@ class LocalPaperEngine:
         can never substitute another instrument, side or trade. ``cause`` names
         the decoded decision every resulting intent traces to (``decision_id``,
         ``controller_profile``, ``pipeline_fixture``); it is recorded before dispatch.
+        ``max_maintenance_utilization`` is the strategy's declared margin ceiling,
+        enforced by admission (MAINTENANCE_UTILIZATION_LIMIT rejects, never resizes).
         """
         if target.context != self.context or not self._armed or self._quiesced:
             raise DomainError("STALE_OR_UNARMED_TARGET")
@@ -1063,7 +1065,7 @@ class LocalPaperEngine:
                 instrument=delta.instrument, base_asset=contract.base_currency, quote_asset=contract.quote_currency,
                 side=delta.side, kind=delta.kind, quantity=delta.quantity, limit_price=delta.limit_price,
                 contract_multiplier=delta.contract_multiplier, child_index=child)
-            record = self.admission.admit(intent)
+            record = self.admission.admit(intent, max_maintenance_utilization=max_maintenance_utilization)
             if cause is not None:
                 self._record_decision_cause(record.intent.intent_id, delta.kind, cause)
             Dispatcher(self.writer, self.interlock, self, reducer=self.reducer).dispatch(record.intent.intent_id).result(timeout=5)
