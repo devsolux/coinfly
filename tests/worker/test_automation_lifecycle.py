@@ -191,10 +191,17 @@ class AutomationFixture(TestCase):
     def tick(self, count: int = 1, *, pause: float = 0.0) -> dict[str, Any]:
         report: dict[str, Any] = {}
         for _ in range(count):
-            report = self.worker.automation.tick(datetime.now(timezone.utc))
+            self.last_tick = datetime.now(timezone.utc)
+            report = self.worker.automation.tick(self.last_tick)
             if pause:
                 time.sleep(pause)
         return report
+
+    def fill_tick(self) -> dict[str, Any]:
+        """Tick 10 ms after the previous tick: new books apply and resting orders fill,
+        but no decision interval can elapse however slow the host is."""
+        self.last_tick += timedelta(milliseconds=10)
+        return self.worker.automation.tick(self.last_tick)
 
     def context(self) -> Any:
         context = self.worker.coordinator.status(self.worker.authority_id).effective_context
@@ -505,7 +512,7 @@ class PaperDerivativesCycleTests(DerivativesFixture):
         intent = IntentStore(self.worker.writer).get(buy["intent_ids"][0])
         self.assertEqual(intent.intent.quantity, Decimal("0.04"))
         self.feed.books["BTC-USD"] = ("99.80", "99.90")
-        self.tick()
+        self.fill_tick()
         self.assertEqual(self.position(), Decimal("0.04"))
         balance = self.rpc("state.snapshot")["balance"]
         self.assertEqual(balance["coverage"], "COMPLETE_VERIFIED")
@@ -517,7 +524,7 @@ class PaperDerivativesCycleTests(DerivativesFixture):
         sell = self.decision()
         self.assertEqual((sell["side"], sell["outcome"]), ("SELL", "DISPATCHED"), sell)
         self.feed.books["BTC-USD"] = ("100.10", "100.20")
-        self.tick()
+        self.fill_tick()
         self.assertEqual(self.position(), Decimal(0))
         # SELL from flat: open a short (ENTRY against margin).
         time.sleep(1.05)
@@ -526,7 +533,7 @@ class PaperDerivativesCycleTests(DerivativesFixture):
         short = self.decision()
         self.assertEqual((short["side"], short["outcome"]), ("SELL", "DISPATCHED"), short)
         self.feed.books["BTC-USD"] = ("100.10", "100.20")
-        self.tick()
+        self.fill_tick()
         self.assertEqual(self.position(), Decimal("-0.04"))
         engine = self.worker._engines[self.context().identity]
         margin = engine.matcher.margin
@@ -539,7 +546,7 @@ class PaperDerivativesCycleTests(DerivativesFixture):
         cover = self.decision()
         self.assertEqual((cover["side"], cover["outcome"]), ("BUY", "DISPATCHED"), cover)
         self.feed.books["BTC-USD"] = ("99.80", "99.90")
-        self.tick()
+        self.fill_tick()
         self.assertEqual(self.position(), Decimal(0))
         Journal(self.worker.writer).verify()
         self.assertEqual(self.worker.automation.status()["execution_health"]["fills"], 4)
