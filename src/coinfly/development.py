@@ -62,7 +62,8 @@ def development_socket(checkout: Path) -> Path:
 
         from coinfly.ipc.windows_native import pipe_path, process_sid
         return Path(pipe_path(process_sid(os.getpid()), checkout=identity))
-    return default_socket_path().with_name(f"development-{identity}.sock")
+    else:
+        return default_socket_path().with_name(f"development-{identity}.sock")
 
 
 # How long a launcher waits for a stale worker to retire (automation stopped,

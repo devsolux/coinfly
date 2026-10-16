@@ -50,9 +50,10 @@ def native_user_home() -> Path:
         if function(None, 0x0028, None, 0, buffer) != 0 or not buffer.value:
             raise DomainError("NATIVE_HOME_UNAVAILABLE")
         return Path(buffer.value)
-    import pwd
+    else:
+        import pwd
 
-    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
 def is_link(path: Path) -> bool:

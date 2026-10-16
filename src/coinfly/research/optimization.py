@@ -544,13 +544,16 @@ def evaluate_fold(resources: StudyResources, fold: Fold, profile: TrainingProfil
 
 def _max_rss_bytes() -> int | None:
     """Process peak RSS in bytes (Linux reports KiB, macOS bytes); None where unmeasured."""
-    try:
-        import resource  # POSIX only; Windows hosts report None rather than a guess.
+    if sys.platform == "win32":
+        return None  # no POSIX resource module: reported as unmeasured rather than a guess
+    else:
+        try:
+            import resource
 
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    except (ImportError, AttributeError, OSError, ValueError):
-        return None
-    return int(peak) if sys.platform == "darwin" else int(peak) * 1024
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        except (ImportError, AttributeError, OSError, ValueError):
+            return None
+        return int(peak) if sys.platform == "darwin" else int(peak) * 1024
 
 
 def comparable_metrics(evaluation: dict[str, Any]) -> dict[str, float | None]:
