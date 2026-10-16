@@ -120,6 +120,18 @@ intent cause `VENUE_SETTLEMENT`, never as a strategy trade. Both appear in
 `automation.status.settlements` as synthetic. None of this is presented as
 venue behavior.
 
+Expiry settles only at a fresh mark: a two-sided book observed no more than the
+paper venue's book age limit (`book_max_age`, 5 s, the same bound a resting
+order needs to fill) before the settlement check. If the contract's book is
+older (for example, the venue stopped quoting it or the feed or worker was
+down across expiry) or missing (no book since a restart), nothing is booked.
+The position, ledger and risk books stay open, and settlement is retried on
+every later tick until a fresh book arrives. Each deferral appears once in
+`automation.status.settlements` as `PAPER_EXPIRY_DEFERRED` with reason
+`PAPER_EXPIRY_MARK_STALE` or `PAPER_EXPIRY_MARK_MISSING` and the mark's
+observation time. No substitute mark is ever used, and new targets are refused
+(`POSITION_MARK_UNVERIFIED`) while any open position lacks a fresh mark.
+
 ## 5. Pause, stop, restart
 
 The development worker runs in the background and keeps running after the

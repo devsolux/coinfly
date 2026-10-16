@@ -109,6 +109,7 @@ class LocalPaperEngine:
         self.config, self.context = config, context
         self.writer, self.reducer, self.interlock = writer, reducer, interlock
         self._settled_events: set[str] = set()
+        self._expiry_deferrals: dict[str, str] = {}  # due expiry event id -> reason last reported
         self._settlement_cursor: datetime | None = None
         self._ready, self._on_change = ready, on_change
         self._lock = threading.RLock()
@@ -606,6 +607,14 @@ class LocalPaperEngine:
         fill, so lots, positions, journal and risk books agree. Every event is
         labeled synthetic; none is venue evidence.
 
+        The expiry close realizes P&L permanently, so it is booked only at a mark
+        the paper venue would still fill against: a two-sided book observed no
+        more than the matcher's ``book_max_age`` before ``now``. Otherwise the
+        event is deferred: nothing is booked, it stays unsettled and is retried on
+        every later call, and a ``PAPER_EXPIRY_DEFERRED`` record with reason
+        ``PAPER_EXPIRY_MARK_STALE`` or ``PAPER_EXPIRY_MARK_MISSING`` is returned
+        once per reason. No other mark is ever substituted.
+
         All of it commits together with the matcher snapshot. If that commit fails
         the in-memory book, the settled-event ids and the settlement cursor are
         rolled back, so the next call retries the same due events.
@@ -615,23 +624,28 @@ class LocalPaperEngine:
                 return ()
             margin = self.matcher.margin
             events: list[dict[str, Any]] = []
+            deferred: list[dict[str, Any]] = []
             previous = self._settlement_cursor
             self._settlement_cursor = now
             if previous is None or now <= previous:
                 return ()  # no retroactive funding: boundaries are charged when the clock crosses them
             snapshot: dict[str, object] | None = None  # matcher state before the first mutation
             added: list[str] = []
+            reported = dict(self._expiry_deferrals)
             try:
                 for position in margin.positions:
                     instrument = position.instrument_id
                     contract = next((item for item in self._instruments if item.instrument_id == instrument), None)
-                    depth = self._depth.get(instrument)
-                    if contract is None or depth is None or not depth[0] or not depth[1]:
+                    if contract is None:
                         continue
-                    mark = (depth[0][0].price + depth[1][0].price) / 2
+                    depth = self._depth.get(instrument)
+                    mark: Decimal | None = None
+                    observed: datetime | None = None
+                    if depth is not None and depth[0] and depth[1]:
+                        mark, observed = (depth[0][0].price + depth[1][0].price) / 2, depth[2]
                     subtype = contract.declared_subtype
                     interval = PAPER_FUNDING_INTERVALS.get(subtype)
-                    if interval is not None:
+                    if interval is not None and mark is not None:
                         boundary = _interval_start(now, interval)
                         while boundary > previous:
                             stamp = boundary.strftime("%Y%m%dT%H%M%SZ")
@@ -652,11 +666,21 @@ class LocalPaperEngine:
                     if subtype is ProductSubtype.DATED_FUTURE and expiry is not None and now >= expiry:
                         event_id = f"{PAPER_EXPIRY_PREFIX}{instrument}:{expiry.strftime('%Y%m%dT%H%M%SZ')}"
                         if event_id not in self._settled_events:
+                            max_age = self.matcher.book_max_age
+                            if mark is None or observed is None or now - observed > max_age:
+                                reason = "PAPER_EXPIRY_MARK_MISSING" if observed is None else "PAPER_EXPIRY_MARK_STALE"
+                                if self._expiry_deferrals.get(event_id) != reason:
+                                    self._expiry_deferrals[event_id] = reason
+                                    deferred.append({"kind": "PAPER_EXPIRY_DEFERRED", "event_id": event_id, "instrument": instrument,
+                                                     "reason": reason, "mark_observed_at": observed.isoformat() if observed is not None else None,
+                                                     "max_mark_age_seconds": str(max_age.total_seconds()), "synthetic": True})
+                                continue
                             if snapshot is None:
                                 snapshot = self.matcher.dump_state()
                             realized = margin.apply_fill(instrument, -position.quantity, mark, multiplier=contract.contract_multiplier,
                                                          fee=Decimal(0), reduce_only=True)
                             self._settled_events.add(event_id)
+                            self._expiry_deferrals.pop(event_id, None)
                             added.append(event_id)
                             events.append({"kind": "PAPER_EXPIRY_SETTLEMENT", "event_id": event_id, "instrument": instrument,
                                            "quantity": str(position.quantity), "mark": str(mark), "realized": str(realized), "synthetic": True})
@@ -685,13 +709,14 @@ class LocalPaperEngine:
                 if snapshot is not None:
                     self._matcher = PaperMatcher.restore(self.context, self._instruments, snapshot)
                 self._settled_events.difference_update(added)
+                self._expiry_deferrals = reported
                 self._settlement_cursor = previous
                 raise
             for incident in incidents:
                 self.interlock.provisional_fence(self.context.authority_id, incident)
-            if events:
+            if events or deferred:
                 self._notify()
-            return tuple(events)
+            return (*events, *deferred)
 
     @exact_decimal
     def _settle_expiry_tx(self, connection: sqlite3.Connection, event: dict[str, Any]) -> FillResult:

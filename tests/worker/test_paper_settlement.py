@@ -74,6 +74,12 @@ class PaperSettlementTests(DerivativesFixture):
         matcher.instruments = tuple(dated if item.instrument_id == "BTC-USD" else item for item in matcher.instruments)
         matcher._instruments["BTC-USD"] = dated
 
+    @staticmethod
+    def refresh_mark(engine: Any, observed_at: datetime, bid: str = "99.80", ask: str = "99.90") -> None:
+        """Feed a BTC-USD book observed at ``observed_at`` (an expiry settles only at a fresh mark)."""
+        engine.update_market("BTC-USD", bids=(DepthLevel(price=Decimal(bid), quantity=Decimal("5")),),
+                             asks=(DepthLevel(price=Decimal(ask), quantity=Decimal("5")),), now=observed_at)
+
     def durable_collateral(self) -> Decimal:
         state = self.worker.writer.call(lambda connection: connection.execute("SELECT state_json FROM wp_paper_books").fetchone()[0])
         return Decimal(json.loads(state)["margin"]["collateral"])
@@ -86,6 +92,7 @@ class PaperSettlementTests(DerivativesFixture):
         expiry = datetime.now(timezone.utc) + timedelta(days=1)
         self.redeclare_as_dated(engine, expiry)
         self.assertEqual(engine.settle(expiry - timedelta(seconds=1)), ())
+        self.refresh_mark(engine, expiry)
         events = engine.settle(expiry + timedelta(seconds=1))
         kinds = [item["kind"] for item in events]
         self.assertIn("PAPER_EXPIRY_SETTLEMENT", kinds)
@@ -105,6 +112,7 @@ class PaperSettlementTests(DerivativesFixture):
         before = engine.admission.drawdown.read(engine.context, engine.scope)
         assert before is not None
         self.before_daily_result = before.daily_net_result
+        self.refresh_mark(engine, expiry)
         [event] = engine.settle(expiry + timedelta(seconds=1))
         self.assertEqual(event["kind"], "PAPER_EXPIRY_SETTLEMENT")
         return engine, expiry, event
@@ -202,6 +210,7 @@ class PaperSettlementTests(DerivativesFixture):
         expiry = datetime.now(timezone.utc) + timedelta(days=1)
         self.redeclare_as_dated(engine, expiry)
         engine.settle(expiry - timedelta(seconds=1))
+        self.refresh_mark(engine, expiry)
         with patch.object(engine, "_persist_tx", side_effect=DomainError("SIMULATED_COMMIT_FAILURE")):
             with self.assertRaisesRegex(DomainError, "SIMULATED_COMMIT_FAILURE"):
                 engine.settle(expiry + timedelta(seconds=1))
@@ -213,6 +222,57 @@ class PaperSettlementTests(DerivativesFixture):
         self.assertEqual(engine.matcher.margin.positions, ())  # type: ignore[union-attr]
         self.assertEqual(self.position(), Decimal(0))
         self.worker.writer.call(lambda connection: assert_context_closed_tx(connection, engine.context))
+
+    def test_expiry_at_a_stale_mark_is_deferred_and_retried_never_booked(self) -> None:
+        engine = self.open_long()
+        margin = engine.matcher.margin
+        assert margin is not None
+        collateral = margin.collateral
+        expiry = datetime.now(timezone.utc) + timedelta(days=1)
+        self.redeclare_as_dated(engine, expiry)
+        engine.settle(expiry - timedelta(seconds=1))
+        # The last BTC-USD book was observed when the long opened, a day before expiry: far past the venue's book age.
+        [deferred] = engine.settle(expiry + timedelta(seconds=1))
+        self.assertEqual((deferred["kind"], deferred["reason"], deferred["instrument"], deferred["synthetic"]),
+                         ("PAPER_EXPIRY_DEFERRED", "PAPER_EXPIRY_MARK_STALE", "BTC-USD", True))
+        # Nothing is booked: margin book, durable book, ledger and events are untouched, and nothing is fenced.
+        self.assertEqual([item.quantity for item in margin.positions], [Decimal("0.04")])
+        self.assertEqual((margin.collateral, self.durable_collateral()), (collateral, collateral))
+        self.assertEqual(self.position(), Decimal("0.04"))
+        self.assertEqual(self.ledger_rows("SELECT 1 FROM ex_fills WHERE trade_id LIKE '%paper-expiry%'"), [])
+        self.assertEqual(self.ledger_rows("SELECT 1 FROM ex_events WHERE event_kind='PAPER_EXPIRY_SETTLEMENT'"), [])
+        self.assertFalse(self.worker.interlock.is_provisionally_fenced(engine.context.authority_id))
+        # Reported once per reason; the event stays due and unsettled.
+        self.assertEqual(engine.settle(expiry + timedelta(seconds=2)), ())
+        self.assertEqual(self.position(), Decimal("0.04"))
+        # With no book at all (as after a restart) it stays deferred under its own reason.
+        engine._depth.pop("BTC-USD")
+        [missing] = engine.settle(expiry + timedelta(seconds=3))
+        self.assertEqual((missing["kind"], missing["reason"]), ("PAPER_EXPIRY_DEFERRED", "PAPER_EXPIRY_MARK_MISSING"))
+        # A book no older than the venue's limit settles the same event at that mark.
+        observed = expiry + timedelta(seconds=4)
+        self.refresh_mark(engine, observed, "100.00", "100.20")
+        [event] = engine.settle(observed + engine.matcher.book_max_age)
+        self.assertEqual((event["kind"], event["event_id"]), ("PAPER_EXPIRY_SETTLEMENT", deferred["event_id"]))
+        self.assertEqual(Decimal(event["mark"]), Decimal("100.10"))
+        self.assertEqual(margin.positions, ())
+        self.assertEqual(self.position(), Decimal(0))
+        self.assertEqual(engine.settle(observed + timedelta(minutes=1)), ())
+        Journal(self.worker.writer).verify()
+
+    def test_expiry_deferral_is_visible_in_automation_status(self) -> None:
+        engine = self.open_long()
+        self.worker.automation.pause_entries()
+        # BTC-USD drops out of the feed: the engine keeps its last book, which has aged past the venue's limit.
+        self.feed.subscribed = ("ETH-USD",)
+        bids, asks, observed = engine._depth["BTC-USD"]
+        engine._depth["BTC-USD"] = (bids, asks, observed - timedelta(minutes=1))
+        self.redeclare_as_dated(engine, datetime.now(timezone.utc) - timedelta(seconds=1))
+        self.tick()
+        settlements = [item for item in self.worker.automation.status()["settlements"] if item["instrument"] == "BTC-USD"]
+        self.assertEqual([(item["kind"], item["reason"]) for item in settlements],
+                         [("PAPER_EXPIRY_DEFERRED", "PAPER_EXPIRY_MARK_STALE")])
+        self.assertEqual(self.position(), Decimal("0.04"))
 
     def test_drain_refused_by_the_matcher_fails_fast_once_and_does_not_fence(self) -> None:
         """A deterministic paper refusal is a proven non-creation: the drain reports it instead of re-planning 1000 times."""
