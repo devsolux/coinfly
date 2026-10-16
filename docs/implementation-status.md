@@ -18,7 +18,7 @@ uses a fresh-install format.
 | Cancellation and account truth | A cancel acknowledgement does not release reservations; reconciliation establishes terminal facts; incomplete account evidence invalidates readiness; cash subtotal labeled as cash | Real venue qualification, scope/placement coverage verification and worst-case reconciliation testing |
 | Regional/derivative routing | Existing capability resolver and distinct product contracts; existing synthetic paper derivative model | Germany/Global entitlement evidence, route verification, live derivative gateway/engine and exact venue economics; enforcement of the declared `margin_mode` and `max_maintenance_utilization` strategy fields |
 | Secrets | Explicit Keychain, Credential Manager and Linux Secret Service setup backends; no plaintext fallback | Linux native execution-vault bridge; genuine signing/enrollment qualification on all targets |
-| Packaging and CI | Existing macOS signing builder; common desktop/worker entry point; Windows/Linux paper development spec; three-target CI matrix (manual `workflow_dispatch` only) | Actual locked CI runs, signed Windows/Linux production installers and platform-specific native qualification |
+| Packaging and CI | Existing macOS signing builder; common desktop/worker entry point; Windows/Linux paper development spec; three-target CI matrix on pushes to `main`, pull requests and manual dispatch | A passing CI history on all three targets, signed Windows/Linux production installers and platform-specific native qualification |
 
 `python dev.py run` is explicitly local paper development. A verified dataset,
 local kernel, stored credential or successful read-only connection test does not

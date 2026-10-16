@@ -32,7 +32,7 @@ The 14 skips are expected on this host:
 | --- | --- |
 | Native desktop smoke tests (`test-ui`) | Not run |
 | Full MaleCNS graph (`prepare`, native kernel, full-graph paper run) | Not run; unit tests use small synthetic graphs |
-| Windows AMD64 and Linux AMD64 native runs | Not run; the CI workflow is manual-only |
+| Windows AMD64 and Linux AMD64 native runs | Not run locally; CI only compiles the native sources on each target |
 | Signed or unsigned production builds | Not run; see [macOS production builds](devsh-production-builds.md) |
 | Live accounts, orders, transfers or enrollment | Never used in testing |
 

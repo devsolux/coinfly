@@ -114,6 +114,6 @@ github-bootstrap:
 	@$(MAKE) github-repo-create
 	@$(MAKE) github-verify
 
-# Trigger the manual-only validation workflow (.github/workflows/ci.yml) on GitHub.
+# Trigger the validation workflow (.github/workflows/ci.yml) on main manually; it also runs on pushes and PRs.
 github-run-ci: github-check
 	gh workflow run ci.yml --repo $(GITHUB_FULL) --ref main
