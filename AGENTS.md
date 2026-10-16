@@ -6,3 +6,4 @@
 - Paper execution is the default. Never place real trades while testing. Credentials, account identifiers, balances, logs, checkpoints and data stay ignored.
 - Use Decimal quantities and persist order intent before sending it. Unknown exchange outcomes stop execution until reconciliation; never blindly retry a trade.
 - Keep README short. Detailed model and execution caveats belong in docs.
+- Work only on `main`: commit there and push `origin main`. Do not create feature branches or pull requests. In a tool-created worktree, rebase onto `origin/main` and land with `git push origin HEAD:main` (fast-forward only); never force-push.
