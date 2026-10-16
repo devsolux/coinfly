@@ -89,6 +89,33 @@ kernel source SHA-256 is
 - The source CI workflow (`.github/workflows/ci.yml`) validates source contracts
   only. It is not a release or target-acceptance job.
 
+## Release workflows
+
+Both run only on manual dispatch or a published release and never hold broker
+credentials.
+
+- `.github/workflows/release.yml` (GitHub-hosted) checks `uv.lock`, builds the
+  source archive, sdist and wheel, verifies them, and signs each file and
+  `SHA256SUMS-python` with Sigstore keyless signing. A published release gets the
+  files and their `.sigstore.json` bundles.
+- `.github/workflows/desktop.yml` is opt-in: set the repository variable
+  `COINFLY_NATIVE_RUNNERS=true` once self-hosted runners with the labels in
+  `.github/actionlint.yaml` exist. It runs `./dev.sh build-unsigned` and, in the
+  protected `coinfly-production-signing` environment, `./dev.sh build` on macOS
+  ARM64. `COINFLY_DATASET_DISTRIBUTION`, `MACOS_SIGN_IDENTITY` and
+  `MACOS_NOTARY_PROFILE` are repository variables; empty values use the `dev.sh`
+  defaults. Windows/Linux jobs build the paper-only development bundles as
+  short-lived artifacts that are never signed or published. Until the acceptance
+  gaps above are closed the macOS jobs stop before publication.
+
+Verify a downloaded asset against its bundle:
+
+```sh
+cosign verify-blob --bundle FILE.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/devsolux/coinfly/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com FILE
+```
+
 Tooling references: [Apple Xcode requirements](https://developer.apple.com/xcode/system-requirements),
 [PyInstaller macOS signing](https://pyinstaller.org/en/stable/feature-notes.html#macos-binary-code-signing),
 [uv lock and sync](https://docs.astral.sh/uv/concepts/projects/sync/).

@@ -10,99 +10,150 @@ concurrency:
   group: desktop-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  unsigned:
-    name: Full production unsigned / ${{ matrix.target }}
+  unsigned-macos:
+    name: Full production unsigned / macOS ARM64
     # Opt-in: without registered native runners these jobs would queue for 24 hours.
-    if: vars.OANDAFLY_NATIVE_RUNNERS == 'true' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: macos-arm64
-            labels: [self-hosted, macOS, ARM64, oandafly-xcode27-interactive]
-          - target: windows-amd64
-            labels: [self-hosted, Windows, X64, oandafly-desktop]
-          - target: linux-amd64
-            labels: [self-hosted, Linux, X64, oandafly-desktop]
-    runs-on: ${{ matrix.labels }}
+    if: vars.COINFLY_NATIVE_RUNNERS == 'true' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    runs-on: [self-hosted, macOS, ARM64, coinfly-xcode27-interactive]
     timeout-minutes: 90
     env:
-      OANDAFLY_BASELINE_CONFIG: ${{ vars.OANDAFLY_BASELINE_CONFIG }}
+      # Runner directory with the reviewed devsolux trust-root.json and manifest.json;
+      # empty uses the runner account's ~/.devsolux/coinfly.
+      COINFLY_DATASET_DISTRIBUTION: ${{ vars.COINFLY_DATASET_DISTRIBUTION }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Synchronize existing checked locks (POSIX)
-        if: runner.os != 'Windows'
+      - name: Synchronize existing checked locks
         run: ./dev.sh setup
-      - name: Synchronize existing checked locks (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./dev.ps1 setup
-      - name: Entire unsigned production pipeline (POSIX)
-        if: runner.os != 'Windows'
-        run: ./dev.sh build-unsigned
-      - name: Entire unsigned production pipeline (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./dev.ps1 build-unsigned
-      - name: Upload only qualified production directories
+      - name: Unsigned preflight, then the entire unsigned production pipeline
+        shell: bash
+        run: |
+          set -eo pipefail
+          distribution=()
+          if [ -n "${COINFLY_DATASET_DISTRIBUTION:-}" ]; then
+            distribution=(--dataset-distribution "$COINFLY_DATASET_DISTRIBUTION")
+          fi
+          ./dev.sh build-unsigned --preflight ${distribution[@]+"${distribution[@]}"}
+          ./dev.sh build-unsigned ${distribution[@]+"${distribution[@]}"}
+      - name: Upload only the published production directory
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: production-unsigned-${{ matrix.target }}
-          path: dist/${{ matrix.target }}/production-unsigned/
+          name: production-unsigned-macos-arm64
+          path: dist/*/macos-arm64/unsigned/
           if-no-files-found: error
       - name: Preserve failed-stage diagnostics separately
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: failed-unverified-${{ matrix.target }}
-          path: |
-            build/desktop/${{ matrix.target }}/**/failed.json
-            build/desktop/${{ matrix.target }}/**/preflight.json
-            build/desktop/${{ matrix.target }}/**/logs/
+          name: failed-unverified-macos-arm64-unsigned
+          path: build/macos-unsigned-*/evidence/
           if-no-files-found: ignore
   signed-macos:
     name: Full production Developer ID / macOS ARM64
     # Opt-in: without registered native runners these jobs would queue for 24 hours.
-    if: vars.OANDAFLY_NATIVE_RUNNERS == 'true' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
-    environment: oandafly-production-signing
-    runs-on: [self-hosted, macOS, ARM64, oandafly-xcode27-interactive]
+    if: vars.COINFLY_NATIVE_RUNNERS == 'true' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    environment: coinfly-production-signing
+    runs-on: [self-hosted, macOS, ARM64, coinfly-xcode27-interactive]
     timeout-minutes: 120
     env:
-      # Empty values deliberately use the same Bash defaults as local builds.
+      # Empty values deliberately use the same dev.sh defaults as local builds.
       MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
       MACOS_NOTARY_PROFILE: ${{ vars.MACOS_NOTARY_PROFILE }}
-      OANDAFLY_BASELINE_CONFIG: ${{ vars.OANDAFLY_BASELINE_CONFIG }}
+      COINFLY_DATASET_DISTRIBUTION: ${{ vars.COINFLY_DATASET_DISTRIBUTION }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: ./dev.sh setup
-      - run: ./dev.sh build
+      - name: Synchronize existing checked locks
+        run: ./dev.sh setup
+      - name: Signed preflight, then the entire Developer ID production pipeline
+        shell: bash
+        run: |
+          set -eo pipefail
+          distribution=()
+          if [ -n "${COINFLY_DATASET_DISTRIBUTION:-}" ]; then
+            distribution=(--dataset-distribution "$COINFLY_DATASET_DISTRIBUTION")
+          fi
+          ./dev.sh build --preflight ${distribution[@]+"${distribution[@]}"}
+          ./dev.sh build ${distribution[@]+"${distribution[@]}"}
       - name: Upload the qualified Developer ID production directory
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: production-signed-macos-arm64
-          path: dist/macos-arm64/production-signed/
+          path: dist/*/macos-arm64/signed/
           if-no-files-found: error
       - name: Preserve failed-stage diagnostics separately
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: failed-unverified-macos-arm64-signed
-          path: |
-            build/desktop/macos-arm64/**/failed.json
-            build/desktop/macos-arm64/**/preflight.json
-            build/desktop/macos-arm64/**/logs/
+          path: build/macos-signed-*/evidence/
+          if-no-files-found: ignore
+  development-bundles:
+    name: Paper-only development bundle / ${{ matrix.target }}
+    # Windows and Linux have no production pipeline yet. These bundles are PAPER ONLY,
+    # cannot satisfy publisher, signing or live requirements, and are never signed
+    # or attached to a release.
+    if: vars.COINFLY_NATIVE_RUNNERS == 'true' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-amd64
+            labels: [self-hosted, Windows, X64, coinfly-desktop]
+          - target: linux-amd64
+            labels: [self-hosted, Linux, X64, coinfly-desktop]
+    runs-on: ${{ matrix.labels }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: false
+      - name: Synchronize locks and the release group with the native Python (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          python3 dev.py setup
+          uv sync --locked --extra desktop --extra research --extra training --group release
+      - name: Synchronize locks and the release group with the native Python (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./dev.ps1 setup
+          uv sync --locked --extra desktop --extra research --extra training --group release
+      - name: Build the paper-only development bundle (POSIX)
+        if: runner.os != 'Windows'
+        run: python3 dev.py build
+      - name: Build the paper-only development bundle (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./dev.ps1 build
+      - name: Upload the paper-only development bundle
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: development-paper-only-${{ matrix.target }}
+          path: dist/coinfly-*-development/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve packaging warnings
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: failed-development-${{ matrix.target }}
+          path: build/development/warn-*.txt
           if-no-files-found: ignore
   sign:
     name: Sigstore keyless signatures
-    needs: [unsigned, signed-macos]
-    # All three unsigned targets are required; the Developer ID build is included when it qualified.
-    if: ${{ !cancelled() && needs.unsigned.result == 'success' }}
+    needs: [unsigned-macos, signed-macos]
+    # The unsigned macOS build is required; the Developer ID build is included when it qualified.
+    if: ${{ !cancelled() && needs.unsigned-macos.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -123,33 +174,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          builds=(release-assets/*/*/SHA256SUMS)
-          if [ "${#builds[@]}" -lt 3 ]; then
-            echo "::error::Expected at least the three qualified native builds, found ${#builds[@]}"
+          mapfile -t sums < <(find release-assets -type f -name 'coinfly-*.zip.sha256' | sort)
+          if [ "${#sums[@]}" -lt 1 ]; then
+            echo "::error::Expected at least the qualified unsigned macOS build, found none"
             exit 1
           fi
-          for sums in "${builds[@]}"; do
-            (cd "$(dirname "$sums")" && sha256sum --strict --check SHA256SUMS)
+          for file in "${sums[@]}"; do
+            (cd "$(dirname "$file")" && sha256sum --strict --check "$(basename "$file")")
           done
           if [ "$EVENT" = release ]; then
-            versions="$(jq -r .version release-assets/*/*/build.json | sort -u)"
+            versions="$(for file in "${sums[@]}"; do basename "$file" | sed -E 's/^coinfly-([0-9]+[.][0-9]+[.][0-9]+)-.*/\1/'; done | sort -u)"
             if [ "$versions" != "${TAG#v}" ]; then
               echo "::error::Release tag $TAG does not match the built version(s): $versions"
               exit 1
             fi
           fi
-          cat release-assets/*/*/SHA256SUMS | sort -k2 > release-assets/SHA256SUMS-desktop
+          cat "${sums[@]}" | sort -k2 > release-assets/SHA256SUMS-desktop
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.1.3
-      - name: Sign archives, checksums and build receipts, then verify each bundle
+      - name: Sign archives, checksums and build manifests, then verify each bundle
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          files=(release-assets/SHA256SUMS-desktop release-assets/*/*/oandafly-*.zip release-assets/*/*/oandafly-*.tar.gz
-                 release-assets/*/*/SHA256SUMS release-assets/*/*/build.json release-assets/*/*/provenance.json)
+          files=(release-assets/SHA256SUMS-desktop)
+          while IFS= read -r archive; do
+            files+=("$archive" "$archive.sha256")
+            if [ -f "$(dirname "$archive")/manifest.json" ]; then
+              files+=("$(dirname "$archive")/manifest.json")
+            fi
+          done < <(find release-assets -type f -name 'coinfly-*.zip' | sort)
           for file in "${files[@]}"; do
             cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
             cosign verify-blob --bundle "$file.sigstore.json" \
@@ -182,23 +236,27 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          for file in signed/SHA256SUMS-desktop signed/*/*/oandafly-*.zip signed/*/*/oandafly-*.tar.gz; do
+          mapfile -t archives < <(find signed -type f -name 'coinfly-*.zip' | sort)
+          assets=(signed/SHA256SUMS-desktop signed/SHA256SUMS-desktop.sigstore.json)
+          for file in signed/SHA256SUMS-desktop "${archives[@]}"; do
             if [ ! -f "$file.sigstore.json" ]; then
               echo "::error::Refusing to publish $file without its Sigstore bundle"
               exit 1
             fi
           done
-          assets=(signed/SHA256SUMS-desktop signed/SHA256SUMS-desktop.sigstore.json
-                  signed/*/*/oandafly-*.zip signed/*/*/oandafly-*.zip.sigstore.json
-                  signed/*/*/oandafly-*.tar.gz signed/*/*/oandafly-*.tar.gz.sigstore.json)
+          for file in "${archives[@]}"; do
+            assets+=("$file" "$file.sigstore.json")
+          done
           gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
 # These are operator-configured runner labels, not assertions that hosted images
-# or the containment/baseline prerequisites exist. No job has broker credentials.
-# A configured baseline transport invokes a separate interactive macOS 26.0
-# runner and returns authenticated payload-bound results; missing input blocks.
+# or the toolchain profile exist. No job has broker credentials. The macOS jobs need
+# a logged-in Apple Silicon runner with the exact Xcode 27.0 profile in
+# docs/devsh-production-builds.md and reviewed publisher metadata on the runner
+# (COINFLY_DATASET_DISTRIBUTION or ~/.devsolux/coinfly); missing input blocks.
+# Product acceptance still lacks its qualification providers, so production builds
+# stop before publication until those exist; nothing here waives that gate.
 # Self-hosted runners need GitHub Actions runner v2.327.0+ (Node 24 actions). Set the
-# repository variable OANDAFLY_NATIVE_RUNNERS=true once they are registered.
+# repository variable COINFLY_NATIVE_RUNNERS=true once they are registered.
 # Source/Python release assets come from release.yml (SHA256SUMS-python).
 # Release builds run on the release tag: allow tags in the signing environment's
-# deployment rules. Verify assets as documented in docs/PRODUCTION_BUILD.md.
+# deployment rules. Verify assets as documented in docs/devsh-production-builds.md.

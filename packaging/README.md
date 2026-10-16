@@ -157,5 +157,7 @@ are excluded from the source ZIP. Do not ship local development attestations as
 production attestations.
 
 The Windows/Linux packaging inputs have not been executed on their targets.
+`.github/workflows/desktop.yml` builds them on opt-in self-hosted runners as
+short-lived artifacts that are never signed or published.
 There is no claim of a signed installer, Linux execution-vault bridge, complete
 native desktop QA or Windows/Linux production bundle attestation.

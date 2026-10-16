@@ -117,7 +117,8 @@ for contributors and agents are in [AGENTS.md](AGENTS.md).
 macOS release builds (`./dev.sh build-unsigned`, `./dev.sh build`, optionally with
 `--preflight`) stay closed until genuine production prerequisites are supplied. See
 [desktop packaging](packaging/README.md) and
-[macOS production builds](docs/devsh-production-builds.md).
+[macOS production builds](docs/devsh-production-builds.md), which also covers the
+opt-in release workflows and how to verify their Sigstore signatures.
 
 ## Documentation
 

@@ -8,6 +8,11 @@ permissions:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+env:
+  UV_VERSION: "0.13.1"
+  PYTHON_VERSION: "3.14.8"
+  # The same uv-managed CPython as CI: it bundles SQLite >=3.51.3 on every runner.
+  UV_MANAGED_PYTHON: "1"
 jobs:
   build:
     name: Build and verify source and Python distributions
@@ -17,33 +22,37 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: '3.13'
-      - name: Verify source manifest and committed locks
-        run: python scripts/project_integrity.py --verify-manifest --require-locks
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: false # release inputs are never restored from a shared cache
+      - name: Verify the committed lock and install the locked environment
+        run: |
+          uv lock --check
+          uv sync --locked --extra desktop --extra research --extra training
       - name: Require the release tag to match the project version
         if: github.event_name == 'release'
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          version="$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           if [ "${TAG#v}" != "$version" ]; then
             echo "::error::Release tag $TAG does not match project version $version"
             exit 1
           fi
-      - name: Install hash-locked build tooling
-        run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Build the deterministic source archive, sdist and wheel
         run: |
           set -euo pipefail
-          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          python scripts/package_source.py --require-locks --output "dist/release/oandafly-$version-source.zip"
-          rm "dist/release/oandafly-$version-source.zip.sha256"
-          git diff --exit-code -- PACKAGE_MANIFEST.json
-          python -m build --sdist --wheel --outdir dist/release
-          python scripts/check_distribution.py "dist/release/oandafly-$version.tar.gz" "dist/release/oandafly-$version-py3-none-any.whl"
-          (cd dist/release && sha256sum oandafly-* > SHA256SUMS-python && cat SHA256SUMS-python)
+          version="$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          uv run python scripts/build_release_archive.py
+          uv build --no-sources
+          uv run python scripts/verify_artifact.py
+          git diff --exit-code
+          mkdir -p dist/release
+          mv "dist/coinfly-$version.zip" "dist/release/coinfly-$version-source.zip"
+          mv "dist/coinfly-$version.tar.gz" "dist/coinfly-$version-py3-none-any.whl" dist/release/
+          (cd dist/release && sha256sum coinfly-* > SHA256SUMS-python && cat SHA256SUMS-python)
       - name: Retain the verified distributions
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -77,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          for file in release/oandafly-* release/SHA256SUMS-python; do
+          for file in release/coinfly-* release/SHA256SUMS-python; do
             cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
             cosign verify-blob --bundle "$file.sigstore.json" \
               --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$file"
@@ -110,7 +119,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          for file in signed/oandafly-* signed/SHA256SUMS-python; do
+          for file in signed/coinfly-* signed/SHA256SUMS-python; do
             case "$file" in *.sigstore.json) continue ;; esac
             if [ ! -f "$file.sigstore.json" ]; then
               echo "::error::Refusing to publish $file without its Sigstore bundle"
@@ -121,3 +130,6 @@ jobs:
 # Runs on GitHub-hosted runners, independent of the native desktop builds. Manual
 # dispatch builds and signs without publishing; a published release attaches the
 # source archive, sdist, wheel, SHA256SUMS-python and a .sigstore.json per file.
+# Verify an asset with: cosign verify-blob --bundle FILE.sigstore.json
+#   --certificate-identity-regexp '^https://github.com/devsolux/coinfly/'
+#   --certificate-oidc-issuer https://token.actions.githubusercontent.com FILE
